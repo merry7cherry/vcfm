@@ -1,0 +1,207 @@
+import math
+from collections import OrderedDict
+from typing import Dict, Optional, Tuple
+
+import math
+from collections import OrderedDict
+from typing import Dict, Optional, Tuple
+
+import torch
+import torch.nn as nn
+from torch.func import functional_call, jvp
+
+
+def _time_broadcast(shape: torch.Size, device: torch.device) -> torch.Tensor:
+    return torch.rand((shape[0],) + (1,) * (len(shape) - 1), device=device)
+
+
+class GaussianCoupling(nn.Module):
+    """Gaussian variational coupling q_\phi(x_0 | x_1)."""
+
+    def __init__(
+        self,
+        net: nn.Module,
+        label_dim: int = 0,
+        min_log_std: float = -7.0,
+        max_log_std: float = 5.0,
+    ) -> None:
+        super().__init__()
+        self.net = net
+        self.label_dim = label_dim
+        self.min_log_std = min_log_std
+        self.max_log_std = max_log_std
+
+    def forward(
+        self, x_1: torch.Tensor, class_labels: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        batch = x_1.shape[0]
+        device = x_1.device
+        noise_labels = torch.zeros(batch, device=device, dtype=x_1.dtype)
+        class_labels = (
+            None
+            if self.label_dim == 0
+            else torch.zeros((batch, self.label_dim), device=device, dtype=x_1.dtype)
+            if class_labels is None
+            else class_labels.to(dtype=x_1.dtype)
+        )
+        outputs = self.net(x_1, noise_labels, class_labels)
+        mu, log_sigma = torch.chunk(outputs, 2, dim=1)
+        log_sigma = torch.clamp(log_sigma, self.min_log_std, self.max_log_std)
+        return mu, log_sigma
+
+
+class VariationallyCoupledFlowMatching(nn.Module):
+    """
+    Variationally-Coupled Flow Matching (VC-FM).
+    """
+
+    def __init__(
+        self,
+        velocity_net: nn.Module,
+        coupling_net: GaussianCoupling,
+        *,
+        sigma_min: float,
+        sigma_max: float,
+        straightness_weight: float,
+        kl_weight: float,
+        label_dim: int,
+    ) -> None:
+        super().__init__()
+        self.velocity_net = velocity_net
+        self.coupling_net = coupling_net
+        self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
+        self.straightness_weight = straightness_weight
+        self.kl_weight = kl_weight
+        self.label_dim = label_dim
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def velocity_parameters(self):
+        return self.velocity_net.parameters()
+
+    def coupling_parameters(self):
+        return self.coupling_net.parameters()
+
+    def _flatten_time(self, t: torch.Tensor) -> torch.Tensor:
+        if t.ndim == 1:
+            return t
+        return t.reshape(t.shape[0], -1)[:, 0]
+
+    def _time_to_sigma(self, t: torch.Tensor) -> torch.Tensor:
+        t_flat = self._flatten_time(t)
+        log_sigma_min = math.log(self.sigma_min)
+        log_sigma_max = math.log(self.sigma_max)
+        log_sigma = (1 - t_flat) * log_sigma_min + t_flat * log_sigma_max
+        return torch.exp(log_sigma)
+
+    def _noise_labels(self, t: torch.Tensor) -> torch.Tensor:
+        sigma = self._time_to_sigma(t)
+        return torch.log(sigma) / 4.0
+
+    def _velocity_forward(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        class_labels: Optional[torch.Tensor],
+        *,
+        detach_params: bool,
+    ) -> torch.Tensor:
+        noise_labels = self._noise_labels(t)
+        if detach_params:
+            params = OrderedDict(
+                (name, param.detach())
+                for name, param in self.velocity_net.named_parameters()
+            )
+        else:
+            params = OrderedDict(self.velocity_net.named_parameters())
+        buffers = OrderedDict(
+            (name, buf.detach()) for name, buf in self.velocity_net.named_buffers()
+        )
+        args = (x, noise_labels, class_labels)
+        return functional_call(self.velocity_net, (params, buffers), args)
+
+    def velocity(
+        self, x: torch.Tensor, t: torch.Tensor, class_labels: Optional[torch.Tensor]
+    ) -> torch.Tensor:
+        return self._velocity_forward(x, t, class_labels, detach_params=False)
+
+    # ------------------------------------------------------------------
+    # Losses
+    # ------------------------------------------------------------------
+    def losses(
+        self, x_1: torch.Tensor, *, class_labels: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
+        device = x_1.device
+        batch = x_1.shape[0]
+
+        eps = torch.randn_like(x_1)
+        mu, log_sigma = self.coupling_net(x_1, class_labels)
+        sigma = torch.exp(log_sigma)
+        x_0 = mu + sigma * eps
+
+        t = _time_broadcast(x_1.shape, device)
+        t.requires_grad_(True)
+        x_t = (1 - t) * x_0 + t * x_1
+        u = (x_1 - x_0).detach()
+
+        # Flow matching loss (theta step)
+        x_t_detached = x_t.detach()
+        t_detached = t.detach()
+        pred = self.velocity(x_t_detached, t_detached, class_labels)
+        fm_loss = ((pred - u) ** 2).reshape(batch, -1).mean(dim=1).mean()
+
+        # Straightness loss (phi step)
+        pred_phi = self._velocity_forward(x_t, t, class_labels, detach_params=True)
+        tangent_x = pred_phi.detach()
+        tangent_t = torch.ones_like(t)
+
+        def phi_fn(x_in: torch.Tensor, t_in: torch.Tensor) -> torch.Tensor:
+            return self._velocity_forward(x_in, t_in, class_labels, detach_params=True)
+
+        _, total_derivative = jvp(phi_fn, (x_t, t), (tangent_x, tangent_t))
+        straightness_loss = (
+            total_derivative.reshape(batch, -1).pow(2).sum(dim=1).mean()
+        )
+
+        # KL regularization
+        kl = 0.5 * (
+            (mu.pow(2) + sigma.pow(2) - 1.0 - 2.0 * log_sigma)
+            .reshape(batch, -1)
+            .sum(dim=1)
+            .mean()
+        )
+
+        phi_loss = self.straightness_weight * straightness_loss + self.kl_weight * kl
+
+        log_dict = {
+            "flow_matching_loss": fm_loss.detach(),
+            "straightness_loss": straightness_loss.detach(),
+            "kl_loss": kl.detach(),
+            "phi_loss": phi_loss.detach(),
+        }
+
+        return fm_loss, phi_loss, log_dict
+
+    # ------------------------------------------------------------------
+    # Sampling
+    # ------------------------------------------------------------------
+    @torch.no_grad()
+    def sample(
+        self,
+        sample_shape: Tuple[int, ...],
+        n_iters: int,
+        device: torch.device,
+        *,
+        class_labels: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        x = torch.randn(sample_shape, device=device)
+        if class_labels is not None and self.label_dim > 0:
+            class_labels = class_labels.to(device=device, dtype=x.dtype)
+        dt = 1.0 / max(n_iters, 1)
+        for step in range(n_iters):
+            t_value = torch.full((sample_shape[0],) + (1,) * (len(sample_shape) - 1), dt * step, device=device)
+            v = self.velocity(x, t_value, class_labels)
+            x = x + dt * v
+        return x

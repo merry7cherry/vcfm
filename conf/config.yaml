@@ -1,7 +1,7 @@
 defaults:
  - dataset: cifar10
- - model: ict
- - network: ddpmpp
+ - model: vcfm
+ - network: edm
 use_logger: True
 project: 'vct_cifar'
 fast_dev_run: False
