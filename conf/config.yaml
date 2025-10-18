@@ -1,7 +1,7 @@
 defaults:
  - dataset: cifar10
- - model: ict
- - network: ddpmpp
+ - model: vcfm
+ - network: edm
 use_logger: True
 project: 'vct_cifar'
 fast_dev_run: False
@@ -28,4 +28,4 @@ accelerator: 'auto'
 strategy: 'auto'
 devices: 'auto'
 gradient_clip_val: 0
-batch_multiplier: 1 # only used for naming, to track the total batch size
+batch_multiplier: 1  # only used for naming, to track the total batch size

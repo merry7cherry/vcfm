@@ -5,7 +5,7 @@ from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig, OmegaConf, ListConfig
 import time
 import wandb
-from lightning_modules.lightning_cm import LightningConsistencyModel
+from lightning_modules.lightning_vcfm import LightningVCFM
 from utils.callback_utils import get_callbacks, get_delete_checkpoints_callback
 from utils.datamodule_utils import get_datamodule
 from utils.naming_utils import get_run_name
@@ -26,14 +26,14 @@ def main(cfg: DictConfig) -> None:
         checkpoint_reference = f'{run_path}:latest'
         logger.download_artifact(checkpoint_reference, save_dir=cfg.root_dir, artifact_type="model")
         checkpoint_path = Path(cfg.root_dir) / "model.ckpt"
-        model = LightningConsistencyModel.load_from_checkpoint(checkpoint_path)
+        model = LightningVCFM.load_from_checkpoint(checkpoint_path)
         cfg = model.cfg
         L.seed_everything(cfg.seed, workers=True)
     else:
         L.seed_everything(cfg.seed, workers=True)
         reload=False
         model = get_model(cfg)
-        model = LightningConsistencyModel(cfg, model)
+        model = LightningVCFM(cfg, model)
 
     if cfg.devices == 'auto':
         num_of_gpus = torch.cuda.device_count()
