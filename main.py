@@ -1,96 +1,71 @@
-import sys
-import hydra
-import lightning as L
-from lightning.pytorch.loggers import WandbLogger
-from omegaconf import DictConfig, OmegaConf, ListConfig
-import time
-import wandb
-from lightning_modules.lightning_vcfm import LightningVCFM
-from utils.callback_utils import get_callbacks, get_delete_checkpoints_callback
-from utils.datamodule_utils import get_datamodule
-from utils.naming_utils import get_run_name
-from utils.model_utils import get_model
-from wandb_config import key # this file is not version controlled, create one and paste there your wandb key
-from lightning.pytorch.utilities import rank_zero_only
+from __future__ import annotations
+
+import argparse
 from pathlib import Path
+from typing import List
+
 import torch
 
-@hydra.main(version_base=None, config_path="conf", config_name="config")
-def main(cfg: DictConfig) -> None:
-    if cfg.reload:
-        reload=True
-        wandb.login(key=key)
-        logger = WandbLogger()
-        run_path = Path(cfg.run_path)
-        run_path = run_path.with_name(f'model-{run_path.name}')
-        checkpoint_reference = f'{run_path}:latest'
-        logger.download_artifact(checkpoint_reference, save_dir=cfg.root_dir, artifact_type="model")
-        checkpoint_path = Path(cfg.root_dir) / "model.ckpt"
-        model = LightningVCFM.load_from_checkpoint(checkpoint_path)
-        cfg = model.cfg
-        L.seed_everything(cfg.seed, workers=True)
-    else:
-        L.seed_everything(cfg.seed, workers=True)
-        reload=False
-        model = get_model(cfg)
-        model = LightningVCFM(cfg, model)
+from vcfm import DataBundle, Trainer, build_dataloaders, build_model, load_config
+from vcfm.callbacks import Callback, FIDCallback, ImageSamplerCallback
 
-    if cfg.devices == 'auto':
-        num_of_gpus = torch.cuda.device_count()
-    elif isinstance(cfg.devices, list) or isinstance(cfg.devices, ListConfig):
-        num_of_gpus = len(cfg.devices)
-    else:
-        num_of_gpus = 1
-    if num_of_gpus > 1:
-        cfg['batch_multiplier'] = num_of_gpus
 
-    name = get_run_name(cfg)
-    dm = get_datamodule(cfg)
-    callbacks = get_callbacks(cfg)
-
-    if cfg.use_logger:
-        wandb.login(key=key)
-        # depending on the case, set log_model=True to log only at the end, log_model="all" to log during training (in case training might be interrupted)
-        logger = WandbLogger(project=cfg.project, name=name, log_model=cfg.log_model, save_dir=cfg.root_dir)
-        config_dictionary = dict(
-            cfg,
+def _make_callbacks(cfg, data: DataBundle, output_dir: Path) -> List[Callback]:
+    callbacks = []
+    sample_dir = output_dir / "samples"
+    if cfg.callbacks.generate and cfg.training.sample_every > 0:
+        callbacks.append(
+            ImageSamplerCallback(
+                sample_shape=cfg.dataset.sample_shape,
+                n_iters=cfg.training.sample_steps,
+                every=cfg.training.sample_every,
+                output_dir=sample_dir,
+                use_ema=cfg.model.use_ema,
+                plot_type=cfg.dataset.plot_type,
+            )
         )
-        if rank_zero_only.rank == 0:
-            logger.experiment.config.update(config_dictionary)
-            callbacks.append(get_delete_checkpoints_callback(cfg, logger.experiment.path))
+    if cfg.callbacks.fid and data.fid is not None and cfg.training.eval_every > 0:
+        callbacks.append(
+            FIDCallback(
+                real_loader=data.fid,
+                sample_shape=cfg.dataset.fid_sample_shape,
+                n_iters=cfg.training.sample_steps,
+                every=cfg.training.eval_every,
+                n_samples=cfg.dataset.n_dataset_samples,
+                use_ema=cfg.model.use_ema,
+            )
+        )
+    return callbacks
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Variationally-Coupled Flow Matching trainer")
+    parser.add_argument("--config", type=str, default="conf/config.yaml", help="Path to the configuration file")
+    parser.add_argument("--device", type=str, default="auto", help="Training device: 'auto', 'cpu', or CUDA id")
+    parser.add_argument("--output", type=str, default="", help="Directory for logs and samples (overrides config)")
+    parser.add_argument("--save", type=str, default="", help="Optional path to store a final checkpoint")
+    args = parser.parse_args()
+
+    cfg = load_config(args.config)
+    output_path = Path(args.output) if args.output else Path(cfg.training.output_dir)
+    output_dir = output_path
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    elif args.device == "cpu":
+        device = torch.device("cpu")
     else:
-        logger = False
+        device = torch.device(args.device)
 
-    trainer = L.Trainer(max_steps=cfg.model.total_training_steps,
-                        strategy=cfg.strategy,
-                        logger=logger,
-                        deterministic=cfg.deterministic,
-                        devices=cfg.devices,
-                        callbacks=callbacks,
-                        log_every_n_steps=cfg.log_frequency,
-                        precision=cfg.precision,
-                        accumulate_grad_batches=cfg.accumulate_grad_batches,
-                        fast_dev_run=cfg.fast_dev_run,
-                        enable_progress_bar=cfg.enable_progress_bar,
-                        accelerator=cfg.accelerator,
-                        default_root_dir=cfg.root_dir,
-                        gradient_clip_val=cfg.gradient_clip_val,
-                        enable_checkpointing=cfg.save_checkpoints,
-                        )
+    data = build_dataloaders(cfg.dataset)
+    model = build_model(cfg)
+    callbacks = _make_callbacks(cfg, data, output_dir)
+    trainer = Trainer(model, cfg, data, device=device, callbacks=callbacks)
+    trainer.fit()
 
-    if reload:
-        trainer.fit(model=model, datamodule=dm, ckpt_path=checkpoint_path)
-    else:
-        trainer.fit(model=model, datamodule=dm)
-
-    time.sleep(10)
-    if rank_zero_only.rank == 0:
-        for artifact_version in wandb.Api().run(logger.experiment.path).logged_artifacts():
-            # Keep only artifacts with alias "best" or "latest"
-            if len(artifact_version.aliases) == 0:
-                artifact_version.delete()
-
-    sys.exit(0)
+    if args.save:
+        trainer.save_checkpoint(args.save)
 
 
 if __name__ == "__main__":
