@@ -2,6 +2,8 @@ import lightning as L
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
+from typing import Optional
+
 from utils.utils import ResumableDataLoader
 from utils.dataset import ImageFolderDataset
 
@@ -22,9 +24,9 @@ class ImagenetDataModule(L.LightningDataModule):
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
         ])
 
-    def setup(self, stage: str):
+    def setup(self, stage: Optional[str] = None):
         # Assign train/val datasets for use in dataloaders
-        if stage == "fit":
+        if stage in (None, "fit"):
             self.train = ImageFolderDataset(path=self.data_dir, use_labels=self.use_labels, xflip=self.xflip, cache=False, transform=self.transform)
             self.fid = ImageFolderDataset(path=self.data_dir, use_labels=self.use_labels, xflip=False, cache=False, transform=transforms.ToTensor())
 

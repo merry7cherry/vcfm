@@ -28,4 +28,4 @@ accelerator: 'auto'
 strategy: 'auto'
 devices: 'auto'
 gradient_clip_val: 0
-batch_multiplier: 1 # only used for naming, to track the total batch size
+batch_multiplier: 1  # only used for naming, to track the total batch size

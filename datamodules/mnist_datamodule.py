@@ -3,6 +3,8 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.datasets import MNIST
 
+from typing import Optional
+
 from utils.utils import ResumableDataLoader
 from utils.utils import rescaling
 
@@ -20,17 +22,17 @@ class MNISTDataModule(L.LightningDataModule):
         MNIST(self.data_dir, train=True, download=True)
         MNIST(self.data_dir, train=False, download=True)
 
-    def setup(self, stage: str):
+    def setup(self, stage: Optional[str] = None):
         # Assign train/val datasets for use in dataloaders
-        if stage == "fit":
+        if stage in (None, "fit"):
             self.train = MNIST(self.data_dir, train=True, transform=self.transform)
             self.fid = MNIST(self.data_dir, train=True, transform=transforms.ToTensor())
             self.test = MNIST(self.data_dir, train=False, transform=self.transform)
         # Assign test dataset for use in dataloader(s)
-        if stage == "test":
+        if stage in (None, "test"):
             self.test = MNIST(self.data_dir, train=False, transform=self.transform)
 
-        if stage == "predict":
+        if stage in (None, "predict"):
             self.predict = MNIST(self.data_dir, train=False, transform=self.transform)
 
     def train_dataloader(self, shuffle=True):

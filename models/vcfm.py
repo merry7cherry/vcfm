@@ -2,17 +2,15 @@ import math
 from collections import OrderedDict
 from typing import Dict, Optional, Tuple
 
-import math
-from collections import OrderedDict
-from typing import Dict, Optional, Tuple
-
 import torch
 import torch.nn as nn
 from torch.func import functional_call, jvp
 
 
-def _time_broadcast(shape: torch.Size, device: torch.device) -> torch.Tensor:
-    return torch.rand((shape[0],) + (1,) * (len(shape) - 1), device=device)
+def _time_broadcast(
+    shape: torch.Size, device: torch.device, dtype: torch.dtype
+) -> torch.Tensor:
+    return torch.rand((shape[0],) + (1,) * (len(shape) - 1), device=device, dtype=dtype)
 
 
 class GaussianCoupling(nn.Module):
@@ -36,13 +34,14 @@ class GaussianCoupling(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         batch = x_1.shape[0]
         device = x_1.device
-        noise_labels = torch.zeros(batch, device=device, dtype=x_1.dtype)
+        dtype = x_1.dtype
+        noise_labels = torch.zeros(batch, device=device, dtype=dtype)
         class_labels = (
             None
             if self.label_dim == 0
-            else torch.zeros((batch, self.label_dim), device=device, dtype=x_1.dtype)
+            else torch.zeros((batch, self.label_dim), device=device, dtype=dtype)
             if class_labels is None
-            else class_labels.to(dtype=x_1.dtype)
+            else class_labels.to(device=device, dtype=dtype)
         )
         outputs = self.net(x_1, noise_labels, class_labels)
         mu, log_sigma = torch.chunk(outputs, 2, dim=1)
@@ -141,24 +140,33 @@ class VariationallyCoupledFlowMatching(nn.Module):
         sigma = torch.exp(log_sigma)
         x_0 = mu + sigma * eps
 
-        t = _time_broadcast(x_1.shape, device)
-        t.requires_grad_(True)
+        t = _time_broadcast(x_1.shape, device, x_1.dtype)
         x_t = (1 - t) * x_0 + t * x_1
         u = (x_1 - x_0).detach()
 
         # Flow matching loss (theta step)
         x_t_detached = x_t.detach()
         t_detached = t.detach()
-        pred = self.velocity(x_t_detached, t_detached, class_labels)
+        labels_detached = (
+            class_labels.detach() if class_labels is not None else None
+        )
+        pred = self.velocity(x_t_detached, t_detached, labels_detached)
         fm_loss = ((pred - u) ** 2).reshape(batch, -1).mean(dim=1).mean()
 
         # Straightness loss (phi step)
-        pred_phi = self._velocity_forward(x_t, t, class_labels, detach_params=True)
+        pred_phi = self._velocity_forward(
+            x_t, t, labels_detached, detach_params=True
+        )
         tangent_x = pred_phi.detach()
         tangent_t = torch.ones_like(t)
 
         def phi_fn(x_in: torch.Tensor, t_in: torch.Tensor) -> torch.Tensor:
-            return self._velocity_forward(x_in, t_in, class_labels, detach_params=True)
+            return self._velocity_forward(
+                x_in,
+                t_in,
+                labels_detached,
+                detach_params=True,
+            )
 
         _, total_derivative = jvp(phi_fn, (x_t, t), (tangent_x, tangent_t))
         straightness_loss = (
@@ -196,12 +204,18 @@ class VariationallyCoupledFlowMatching(nn.Module):
         *,
         class_labels: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        x = torch.randn(sample_shape, device=device)
+        dtype = next(self.velocity_net.parameters()).dtype
+        x = torch.randn(sample_shape, device=device, dtype=dtype)
         if class_labels is not None and self.label_dim > 0:
-            class_labels = class_labels.to(device=device, dtype=x.dtype)
+            class_labels = class_labels.to(device=device, dtype=dtype)
         dt = 1.0 / max(n_iters, 1)
         for step in range(n_iters):
-            t_value = torch.full((sample_shape[0],) + (1,) * (len(sample_shape) - 1), dt * step, device=device)
+            t_value = torch.full(
+                (sample_shape[0],) + (1,) * (len(sample_shape) - 1),
+                dt * step,
+                device=device,
+                dtype=dtype,
+            )
             v = self.velocity(x, t_value, class_labels)
             x = x + dt * v
         return x

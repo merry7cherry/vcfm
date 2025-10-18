@@ -21,6 +21,22 @@ POT
 pyspng
 ```
 You can check `requirements.txt` for the exact packases used in our experiments.
+## Configurable datasets and networks
+All datasets are configured via Hydra in [`conf/dataset`](conf/dataset) and can be selected at the command line:
+
+| Dataset key        | Notes                          |
+|--------------------|--------------------------------|
+| `cifar10`          | 32×32 RGB, 10 classes          |
+| `mnist`            | 28×28 grayscale, 10 classes    |
+| `fashion_mnist`    | 28×28 grayscale, 10 classes    |
+| `ffhq`             | 64×64 RGB, optional labels     |
+| `imagenet`         | 64×64 RGB, 1000 classes        |
+
+Backbone networks are selected from [`conf/network`](conf/network) with `network=edm` (Song U-Net) or `network=edm2` (EDM2 U-Net). Both backbones are fully supported by the VC-FM objective and can optionally load pretrained weights through `network.reload_url`.
+
+### Enabling class-conditional training
+Set `model.class_conditional=True` to activate label conditioning. The Lightning module automatically converts integer labels to one-hot vectors with the correct dimensionality, and all datamodules expose label tensors whenever class conditioning is requested. During sampling you may provide either integer class indices or one-hot vectors; if omitted, zero vectors are used (equivalent to classifier-free guidance with a single null label).
+
 ## Training
 We provide example commands for training VC-FM with the new Flow Matching objectives. Batch size is specified per device.
 
@@ -49,6 +65,19 @@ python main.py \
     network.reload_url='https://nvlabs-fi-cdn.nvidia.com/edm2/posthoc-reconstructions/edm2-img64-s-1073741-0.075.pkl' \
     model.straightness_weight=0.5 \
     model.kl_weight=0.5
+```
+
+### Class-conditional CIFAR-10
+```bash
+python main.py \
+    project=vcfm_cifar_conditional \
+    dataset=cifar10 \
+    dataset.batch_size=256 \
+    model=vcfm \
+    model.class_conditional=True \
+    network=edm \
+    model.straightness_weight=1.0 \
+    model.kl_weight=1.0
 ```
 
 ### FFHQ 64×64
