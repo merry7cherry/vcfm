@@ -67,6 +67,7 @@ class Trainer:
         *,
         device: Optional[torch.device] = None,
         callbacks: Optional[List[Callback]] = None,
+        checkpoint_dir: Optional[Path] = None,
     ) -> None:
         self.model = model
         self.cfg = cfg
@@ -75,6 +76,7 @@ class Trainer:
         self.callbacks = callbacks or []
         self.global_step = 0
         self.history: Dict[str, List[Tuple[int, float]]] = {}
+        self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir is not None else None
 
         set_seed(cfg.training.seed)
         self.model.to(self.device)
@@ -112,11 +114,39 @@ class Trainer:
             "model": self.model.state_dict(),
             "ema": self.ema.model.state_dict() if self.ema is not None else None,
             "global_step": self.global_step,
+            "opt_theta": self.opt_theta.state_dict(),
+            "opt_phi": self.opt_phi.state_dict(),
             "config": asdict(self.cfg),
         }
 
     def save_checkpoint(self, path: str | Path) -> None:
-        torch.save(self.state_dict(), path)
+        checkpoint_path = Path(path)
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self.state_dict(), checkpoint_path)
+
+    def load_checkpoint(self, path: str | Path, *, strict: bool = True) -> None:
+        checkpoint = torch.load(path, map_location=self.device)
+        model_state = checkpoint.get("model")
+        if model_state is None:
+            raise KeyError("Checkpoint is missing the 'model' state dictionary.")
+        self.model.load_state_dict(model_state, strict=strict)
+
+        opt_theta_state = checkpoint.get("opt_theta")
+        if opt_theta_state is not None:
+            self.opt_theta.load_state_dict(opt_theta_state)
+
+        opt_phi_state = checkpoint.get("opt_phi")
+        if opt_phi_state is not None:
+            self.opt_phi.load_state_dict(opt_phi_state)
+
+        ema_state = checkpoint.get("ema")
+        if ema_state is not None and self.use_ema:
+            if self.ema is None:
+                self.ema = EMA(self.model, self.cfg.model.ema_rate, self.cfg.model.ema_type)
+                self.ema.to(self.device)
+            self.ema.model.load_state_dict(ema_state, strict=strict)
+
+        self.global_step = int(checkpoint.get("global_step", 0))
 
     # ------------------------------------------------------------------
     # Public API
@@ -144,8 +174,14 @@ class Trainer:
         for callback in self.callbacks:
             callback.on_train_start(self)
 
-        progress = tqdm(range(total_steps), desc="Training", dynamic_ncols=True)
-        for step in progress:
+        progress = tqdm(
+            range(self.global_step, total_steps),
+            desc="Training",
+            dynamic_ncols=True,
+            initial=min(self.global_step, total_steps),
+            total=total_steps,
+        )
+        for _ in progress:
             try:
                 batch = next(iterator)
             except StopIteration:
@@ -188,6 +224,15 @@ class Trainer:
                 callback.on_step_end(self, self.global_step + 1, logs)
 
             self.global_step += 1
+
+            checkpoint_every = self.cfg.training.checkpoint_every
+            if (
+                checkpoint_every > 0
+                and self.checkpoint_dir is not None
+                and self.global_step % checkpoint_every == 0
+            ):
+                checkpoint_name = f"checkpoint-{self.global_step:07d}.pt"
+                self.save_checkpoint(self.checkpoint_dir / checkpoint_name)
 
             if sample_every > 0 and self.global_step % sample_every == 0:
                 for callback in self.callbacks:
