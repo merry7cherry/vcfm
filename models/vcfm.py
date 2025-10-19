@@ -145,17 +145,16 @@ class VariationallyCoupledFlowMatching(nn.Module):
         noise_labels = self._noise_labels(t)
         if detach_params:
             params = OrderedDict(
-                # Detach and clone parameters so that subsequent in-place
-                # optimizer updates do not invalidate the computation graph.
                 (name, param.detach().clone())
                 for name, param in self.velocity_net.named_parameters()
             )
+            buffers = OrderedDict(
+                (name, buf.detach().clone())
+                for name, buf in self.velocity_net.named_buffers()
+            )
         else:
             params = OrderedDict(self.velocity_net.named_parameters())
-        buffers = OrderedDict(
-            # Likewise clone buffers that participate in the functional call.
-            (name, buf.detach().clone()) for name, buf in self.velocity_net.named_buffers()
-        )
+            buffers = OrderedDict(self.velocity_net.named_buffers())
         args = (x, noise_labels, class_labels)
         return functional_call(self.velocity_net, (params, buffers), args)
 
@@ -202,10 +201,11 @@ class VariationallyCoupledFlowMatching(nn.Module):
         fm_loss = ((pred - u) ** 2).reshape(batch, -1).mean(dim=1).mean()
 
         # Straightness loss (phi step)
-        pred_phi = self._velocity_forward(
-            x_t, t, labels_detached, detach_params=True
-        )
-        tangent_x = pred_phi.detach()
+        # pred_phi = self._velocity_forward(
+        #     x_t, t, labels_detached, detach_params=True
+        # )
+        # tangent_x = pred_phi.detach()
+        tangent_x = (x_1 - x_0).detach()  # u = (x_1 - x_0)
         tangent_t = torch.ones_like(t)
 
         def phi_fn(x_in: torch.Tensor, t_in: torch.Tensor) -> torch.Tensor:
