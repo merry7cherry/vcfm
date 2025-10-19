@@ -68,7 +68,9 @@ def _build_velocity_net(cfg: Config, out_channels: int) -> torch.nn.Module:
     return net
 
 
-def build_model(cfg: Config) -> VariationallyCoupledFlowMatching:
+def build_model(
+    cfg: Config, *, coupling_num_blocks: int | None = None
+) -> VariationallyCoupledFlowMatching:
     assert cfg.model.name == "vcfm"
     velocity_net = _build_velocity_net(cfg, cfg.dataset.out_channels)
 
@@ -76,6 +78,10 @@ def build_model(cfg: Config) -> VariationallyCoupledFlowMatching:
     coupling_out_channels = cfg.dataset.out_channels * 2
     coupling_cfg.dataset.out_channels = coupling_out_channels
     coupling_cfg.network.reload_url = ""
+    if coupling_num_blocks is not None:
+        if coupling_num_blocks <= 0:
+            raise ValueError("coupling_num_blocks must be a positive integer.")
+        coupling_cfg.network.num_blocks = coupling_num_blocks
     coupling_net = _build_velocity_net(coupling_cfg, coupling_out_channels)
 
     label_dim = cfg.dataset.label_dim if cfg.model.class_conditional else 0

@@ -4,6 +4,7 @@ from typing import Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.func import functional_call, jvp
 
 
@@ -11,6 +12,39 @@ def _time_broadcast(
     shape: torch.Size, device: torch.device, dtype: torch.dtype
 ) -> torch.Tensor:
     return torch.rand((shape[0],) + (1,) * (len(shape) - 1), device=device, dtype=dtype)
+
+
+def _prepare_class_labels(
+    class_labels: Optional[torch.Tensor],
+    *,
+    batch_size: int,
+    label_dim: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> Optional[torch.Tensor]:
+    """Validate, format, and broadcast class labels."""
+
+    if label_dim == 0:
+        return None
+    if class_labels is None:
+        raise ValueError(
+            "Class labels must be provided when using a class-conditional model."
+        )
+    if class_labels.ndim == 0:
+        class_labels = class_labels.unsqueeze(0)
+    if class_labels.ndim == 1:
+        class_labels = F.one_hot(class_labels.to(torch.int64), num_classes=label_dim)
+    elif class_labels.ndim != 2 or class_labels.shape[-1] != label_dim:
+        raise ValueError(
+            "Class labels must be 1D indices or 2D one-hot vectors matching label_dim."
+        )
+    if class_labels.shape[0] not in {1, batch_size}:
+        raise ValueError(
+            "Class labels must match the batch size or provide a single label to broadcast."
+        )
+    if class_labels.shape[0] == 1 and batch_size > 1:
+        class_labels = class_labels.expand(batch_size, -1)
+    return class_labels.to(device=device, dtype=dtype)
 
 
 class GaussianCoupling(nn.Module):
@@ -36,12 +70,12 @@ class GaussianCoupling(nn.Module):
         device = x_1.device
         dtype = x_1.dtype
         noise_labels = torch.zeros(batch, device=device, dtype=dtype)
-        class_labels = (
-            None
-            if self.label_dim == 0
-            else torch.zeros((batch, self.label_dim), device=device, dtype=dtype)
-            if class_labels is None
-            else class_labels.to(device=device, dtype=dtype)
+        class_labels = _prepare_class_labels(
+            class_labels,
+            batch_size=batch,
+            label_dim=self.label_dim,
+            device=device,
+            dtype=dtype,
         )
         outputs = self.net(x_1, noise_labels, class_labels)
         mu, log_sigma = torch.chunk(outputs, 2, dim=1)
@@ -138,6 +172,14 @@ class VariationallyCoupledFlowMatching(nn.Module):
         device = x_1.device
         batch = x_1.shape[0]
 
+        class_labels = _prepare_class_labels(
+            class_labels,
+            batch_size=batch,
+            label_dim=self.label_dim,
+            device=device,
+            dtype=x_1.dtype,
+        )
+
         eps = torch.randn_like(x_1)
         mu, log_sigma = self.coupling_net(x_1, class_labels)
         sigma = torch.exp(log_sigma)
@@ -208,6 +250,14 @@ class VariationallyCoupledFlowMatching(nn.Module):
         class_labels: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         dtype = next(self.velocity_net.parameters()).dtype
+        batch = sample_shape[0]
+        class_labels = _prepare_class_labels(
+            class_labels,
+            batch_size=batch,
+            label_dim=self.label_dim,
+            device=device,
+            dtype=dtype,
+        )
         x = torch.randn(sample_shape, device=device, dtype=dtype)
         if class_labels is not None and self.label_dim > 0:
             class_labels = class_labels.to(device=device, dtype=dtype)
