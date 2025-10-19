@@ -187,9 +187,8 @@ class VariationallyCoupledFlowMatching(nn.Module):
         x_0 = mu + sigma * eps
 
         t = _time_broadcast(x_1.shape, device, x_1.dtype)
-        t = t.requires_grad_()
         x_t = (1 - t) * x_0 + t * x_1
-        x_t = x_t.requires_grad_()
+        x_t = x_t.requires_grad_(True)
         u = (x_1 - x_0).detach()
 
         # Flow matching loss (theta step)
