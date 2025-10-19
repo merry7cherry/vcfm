@@ -110,13 +110,16 @@ class VariationallyCoupledFlowMatching(nn.Module):
         noise_labels = self._noise_labels(t)
         if detach_params:
             params = OrderedDict(
-                (name, param.detach())
+                # Detach and clone parameters so that subsequent in-place
+                # optimizer updates do not invalidate the computation graph.
+                (name, param.detach().clone())
                 for name, param in self.velocity_net.named_parameters()
             )
         else:
             params = OrderedDict(self.velocity_net.named_parameters())
         buffers = OrderedDict(
-            (name, buf.detach()) for name, buf in self.velocity_net.named_buffers()
+            # Likewise clone buffers that participate in the functional call.
+            (name, buf.detach().clone()) for name, buf in self.velocity_net.named_buffers()
         )
         args = (x, noise_labels, class_labels)
         return functional_call(self.velocity_net, (params, buffers), args)
