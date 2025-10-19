@@ -5,7 +5,8 @@ from typing import Dict, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.func import functional_call, jvp
+from torch.autograd.functional import jvp as autograd_jvp
+from torch.func import functional_call
 
 
 def _time_broadcast(
@@ -186,7 +187,9 @@ class VariationallyCoupledFlowMatching(nn.Module):
         x_0 = mu + sigma * eps
 
         t = _time_broadcast(x_1.shape, device, x_1.dtype)
+        t = t.requires_grad_()
         x_t = (1 - t) * x_0 + t * x_1
+        x_t = x_t.requires_grad_()
         u = (x_1 - x_0).detach()
 
         # Flow matching loss (theta step)
@@ -213,7 +216,13 @@ class VariationallyCoupledFlowMatching(nn.Module):
                 detach_params=True,
             )
 
-        _, total_derivative = jvp(phi_fn, (x_t, t), (tangent_x, tangent_t))
+        _, total_derivative = autograd_jvp(
+            phi_fn,
+            (x_t, t),
+            (tangent_x, tangent_t),
+            create_graph=True,
+            strict=True,
+        )
         straightness_loss = (
             total_derivative.reshape(batch, -1).pow(2).sum(dim=1).mean()
         )
