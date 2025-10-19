@@ -213,6 +213,8 @@ class Trainer:
             progress.set_postfix(
                 {
                     "fm": logs.get("flow_matching_loss", logs.get("fm_loss", 0.0)),
+                    "straightness": logs.get("straightness_loss", 0.0),
+                    "kl": logs.get("kl_loss", 0.0),
                     "phi": logs.get("phi_loss", 0.0),
                 }
             )
