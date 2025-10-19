@@ -6,3 +6,4 @@ torchmetrics
 tqdm
 Pillow
 matplotlib
+requests
