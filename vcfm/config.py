@@ -91,7 +91,7 @@ def _compose_from_defaults(config_path: Path) -> Dict[str, Any]:
     defaults = cfg.pop("defaults", [])
     result = OmegaConf.create()
     for item in defaults:
-        if not isinstance(item, dict) or len(item) != 1:
+        if not (hasattr(item, 'items') and hasattr(item, '__len__')) or len(item) != 1:
             raise ValueError("Defaults entries must be dictionaries with a single key/value pair.")
         key, value = next(iter(item.items()))
         nested = OmegaConf.load(config_path.parent / key / f"{value}.yaml")

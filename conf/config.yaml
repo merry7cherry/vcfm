@@ -1,7 +1,7 @@
 defaults:
-  - dataset: cifar10
-  - model: vcfm
-  - network: edm
+  - {dataset: cifar10}
+  - {model: vcfm}
+  - {network: edm}
 
 training:
   log_every: 100
