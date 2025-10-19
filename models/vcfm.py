@@ -185,6 +185,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
         mu, log_sigma = self.coupling_net(x_1, class_labels)
         sigma = torch.exp(log_sigma)
         x_0 = mu + sigma * eps
+        x_0 = x_0.requires_grad_(True)
 
         t = _time_broadcast(x_1.shape, device, x_1.dtype)
         x_t = (1 - t) * x_0 + t * x_1

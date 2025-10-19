@@ -19,6 +19,8 @@ def _build_velocity_net(cfg: Config, out_channels: int) -> torch.nn.Module:
     net_cfg = cfg.network
     label_dim = dataset.label_dim if cfg.model.class_conditional else 0
 
+    print(f"Building net with num_blocks: {net_cfg.num_blocks}")
+
     if net_cfg.name == "edm":
         net = SongUNet(
             img_resolution=dataset.img_resolution,
@@ -72,6 +74,7 @@ def build_model(
     cfg: Config, *, coupling_num_blocks: int | None = None
 ) -> VariationallyCoupledFlowMatching:
     assert cfg.model.name == "vcfm"
+    print(f"Building generation model with num_blocks: {cfg.network.num_blocks}")
     velocity_net = _build_velocity_net(cfg, cfg.dataset.out_channels)
 
     coupling_cfg = copy.deepcopy(cfg)
@@ -82,6 +85,7 @@ def build_model(
         if coupling_num_blocks <= 0:
             raise ValueError("coupling_num_blocks must be a positive integer.")
         coupling_cfg.network.num_blocks = coupling_num_blocks
+    print(f"Building coupling model with num_blocks: {coupling_cfg.network.num_blocks}")
     coupling_net = _build_velocity_net(coupling_cfg, coupling_out_channels)
 
     label_dim = cfg.dataset.label_dim if cfg.model.class_conditional else 0
