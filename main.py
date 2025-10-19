@@ -44,6 +44,15 @@ def main() -> None:
     parser.add_argument("--device", type=str, default="auto", help="Training device: 'auto', 'cpu', or CUDA id")
     parser.add_argument("--output", type=str, default="", help="Directory for logs and samples (overrides config)")
     parser.add_argument("--save", type=str, default="", help="Optional path to store a final checkpoint")
+    parser.add_argument(
+        "--resume", type=str, default="", help="Optional path to a checkpoint to resume training"
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default="",
+        help="Directory to store intermediate checkpoints (defaults to output/checkpoints)",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -61,7 +70,19 @@ def main() -> None:
     data = build_dataloaders(cfg.dataset)
     model = build_model(cfg)
     callbacks = _make_callbacks(cfg, data, output_dir)
-    trainer = Trainer(model, cfg, data, device=device, callbacks=callbacks)
+    checkpoint_dir = Path(args.checkpoint_dir) if args.checkpoint_dir else output_dir / "checkpoints"
+    trainer = Trainer(
+        model,
+        cfg,
+        data,
+        device=device,
+        callbacks=callbacks,
+        checkpoint_dir=checkpoint_dir if cfg.training.checkpoint_every > 0 else None,
+    )
+
+    if args.resume:
+        trainer.load_checkpoint(args.resume)
+
     trainer.fit()
 
     if args.save:
