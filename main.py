@@ -53,6 +53,12 @@ def main() -> None:
         default="",
         help="Directory to store intermediate checkpoints (defaults to output/checkpoints)",
     )
+    parser.add_argument(
+        "--coupling-num-blocks",
+        type=int,
+        default=1,
+        help="Number of residual blocks for the Gaussian coupling network (default: 1)",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -68,7 +74,7 @@ def main() -> None:
         device = torch.device(args.device)
 
     data = build_dataloaders(cfg.dataset)
-    model = build_model(cfg)
+    model = build_model(cfg, coupling_num_blocks=args.coupling_num_blocks)
     callbacks = _make_callbacks(cfg, data, output_dir)
     checkpoint_dir = Path(args.checkpoint_dir) if args.checkpoint_dir else output_dir / "checkpoints"
     trainer = Trainer(
