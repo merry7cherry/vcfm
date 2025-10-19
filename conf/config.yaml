@@ -5,10 +5,11 @@ defaults:
 
 training:
   log_every: 100
-  eval_every: 1000
-  sample_every: 1000
-  sample_steps: 50
-  grad_clip: null
+  eval_every: 10000
+  sample_every: 10000
+  sample_steps: 5
+  checkpoint_every: 1000
+  grad_clip: 1.0
   output_dir: runs
   seed: 42
 
