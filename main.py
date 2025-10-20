@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 from pathlib import Path
 from typing import List
 
@@ -38,6 +39,31 @@ def _make_callbacks(cfg, data: DataBundle, output_dir: Path) -> List[Callback]:
     return callbacks
 
 
+def _print_config(cfg) -> None:
+    print("=== Configuration Parameters ===")
+    config_dict = asdict(cfg)
+
+    def _print_nested(data, indent: int = 0) -> None:
+        indent_str = " " * indent
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    print(f"{indent_str}{key}:")
+                    _print_nested(value, indent + 2)
+                else:
+                    print(f"{indent_str}{key}: {value}")
+        else:
+            print(f"{indent_str}{data}")
+
+    for section, params in config_dict.items():
+        print(f"{section.upper()}:")
+        if isinstance(params, dict):
+            _print_nested(params, indent=2)
+        else:
+            _print_nested(params, indent=2)
+        print()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Variationally-Coupled Flow Matching trainer")
     parser.add_argument("--config", type=str, default="conf/config.yaml", help="Path to the configuration file")
@@ -72,6 +98,8 @@ def main() -> None:
         device = torch.device("cpu")
     else:
         device = torch.device(args.device)
+
+    _print_config(cfg)
 
     data = build_dataloaders(cfg.dataset)
     model = build_model(cfg, coupling_num_blocks=args.coupling_num_blocks)
