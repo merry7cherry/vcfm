@@ -68,6 +68,7 @@ class Trainer:
         device: Optional[torch.device] = None,
         callbacks: Optional[List[Callback]] = None,
         checkpoint_dir: Optional[Path] = None,
+        checkpoint_prefix: Optional[str] = None,
     ) -> None:
         self.model = model
         self.cfg = cfg
@@ -77,6 +78,7 @@ class Trainer:
         self.global_step = 0
         self.history: Dict[str, List[Tuple[int, float]]] = {}
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir is not None else None
+        self.checkpoint_prefix = checkpoint_prefix or "checkpoint"
 
         set_seed(cfg.training.seed)
         self.model.to(self.device)
@@ -233,7 +235,7 @@ class Trainer:
                 and self.checkpoint_dir is not None
                 and self.global_step % checkpoint_every == 0
             ):
-                checkpoint_name = f"checkpoint-{self.global_step:07d}.pt"
+                checkpoint_name = f"{self.checkpoint_prefix}_step-{self.global_step:07d}.pt"
                 self.save_checkpoint(self.checkpoint_dir / checkpoint_name)
 
             if sample_every > 0 and self.global_step % sample_every == 0:
