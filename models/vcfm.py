@@ -127,7 +127,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
         t_flat = self._flatten_time(t)
         log_sigma_min = math.log(self.sigma_min)
         log_sigma_max = math.log(self.sigma_max)
-        log_sigma = (1 - t_flat) * log_sigma_min + t_flat * log_sigma_max
+        log_sigma = (1 - t_flat) * log_sigma_max + t_flat * log_sigma_min
         return torch.exp(log_sigma)
 
     def _noise_labels(self, t: torch.Tensor) -> torch.Tensor:
@@ -187,6 +187,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
         x_0 = x_0.requires_grad_(True)
 
         t = _time_broadcast(x_1.shape, device, x_1.dtype)
+        t = t.requires_grad_(True)
         x_t = (1 - t) * x_0 + t * x_1
         x_t = x_t.requires_grad_(True)
         u = (x_1 - x_0).detach()
