@@ -1,6 +1,6 @@
 name: 'vcfm'
 use_ema: True
-ema_rate: 0.999
+ema_rate: 0.99
 ema_type: 'traditional'
 class_conditional: True
 
