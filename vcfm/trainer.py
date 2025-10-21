@@ -105,6 +105,66 @@ class Trainer:
     # ------------------------------------------------------------------
     # Logging utilities
     # ------------------------------------------------------------------
+    def _component_gradients(
+        self,
+        loss: torch.Tensor,
+        named_parameters: List[Tuple[str, nn.Parameter]],
+        retain_graph: bool,
+    ) -> List[Tuple[str, Optional[torch.Tensor]]]:
+        grads = torch.autograd.grad(
+            loss,
+            [param for _, param in named_parameters],
+            retain_graph=retain_graph,
+            allow_unused=True,
+        )
+        return [
+            (name, grad.detach() if grad is not None else None)
+            for (name, _), grad in zip(named_parameters, grads)
+        ]
+
+    @torch.no_grad()
+    def _report_gradients(
+        self,
+        name: str,
+        named_parameters: List[Tuple[str, nn.Parameter]],
+        gradients: Optional[List[Tuple[str, Optional[torch.Tensor]]]] = None,
+    ) -> None:
+        if gradients is None:
+            grads = [
+                param.grad.detach().flatten()
+                for _, param in named_parameters
+                if param.grad is not None
+            ]
+        else:
+            grads = [grad.detach().flatten() for _, grad in gradients if grad is not None]
+        if not grads:
+            print(f"[Gradients][{name}] No gradients available.")
+            return
+
+        flat_grads = torch.cat(grads)
+        grad_mean = flat_grads.mean().item()
+        grad_std = flat_grads.std(unbiased=False).item()
+        grad_min = flat_grads.min().item()
+        grad_max = flat_grads.max().item()
+        grad_norm = torch.linalg.vector_norm(flat_grads).item()
+
+        print(
+            f"[Gradients][{name}] stats -> mean: {grad_mean:.6e}, std: {grad_std:.6e}, "
+            f"min: {grad_min:.6e}, max: {grad_max:.6e}, l2-norm: {grad_norm:.6e}"
+        )
+
+        if gradients is None:
+            source = ((param_name, param.grad) for param_name, param in named_parameters)
+        else:
+            source = gradients
+        for param_name, grad in source:
+            if grad is None:
+                continue
+            grad_matrix = grad.detach().cpu()
+            print(f"[Gradients][{name}] tensor: {param_name}, shape: {tuple(grad_matrix.shape)}")
+            print(grad_matrix)
+            break
+
     def log_scalar(self, name: str, value: float, step: Optional[int] = None) -> None:
         current_step = self.global_step if step is None else step
         self.history.setdefault(name, []).append((current_step, float(value)))
@@ -194,14 +254,46 @@ class Trainer:
             class_labels = self._format_labels(raw_labels, inputs)
 
             self.opt_theta.zero_grad(set_to_none=True)
-            theta_loss, phi_loss, logs = self.model.losses(inputs, class_labels=class_labels)
+            (
+                theta_loss,
+                phi_loss,
+                logs,
+                theta_components,
+                phi_components,
+            ) = self.model.losses(inputs, class_labels=class_labels)
+            velocity_params = list(self.model.velocity_net.named_parameters())
+            for component_name, component_loss in theta_components.items():
+                component_grads = self._component_gradients(
+                    component_loss,
+                    velocity_params,
+                    retain_graph=True,
+                )
+                self._report_gradients(
+                    f"theta[{component_name}]",
+                    velocity_params,
+                    gradients=component_grads,
+                )
             theta_loss.backward(retain_graph=True)
+            self._report_gradients("theta", velocity_params)
             if grad_clip is not None:
                 torch.nn.utils.clip_grad_norm_(self.model.velocity_parameters(), grad_clip)
             self.opt_theta.step()
 
             self.opt_phi.zero_grad(set_to_none=True)
+            coupling_params = list(self.model.coupling_net.named_parameters())
+            for component_name, component_loss in phi_components.items():
+                component_grads = self._component_gradients(
+                    component_loss,
+                    coupling_params,
+                    retain_graph=True,
+                )
+                self._report_gradients(
+                    f"phi[{component_name}]",
+                    coupling_params,
+                    gradients=component_grads,
+                )
             phi_loss.backward()
+            self._report_gradients("phi", coupling_params)
             if grad_clip is not None:
                 torch.nn.utils.clip_grad_norm_(self.model.coupling_parameters(), grad_clip)
             self.opt_phi.step()
