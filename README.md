@@ -31,11 +31,11 @@ defaults:
   - network: edm
 
 training:
-  log_every: 100
-  eval_every: 1000
-  sample_every: 1000
-  sample_steps: 50
-  grad_clip: null
+  log_every: 1000
+  eval_every: 10000
+  sample_every: 10000
+  sample_steps: 5
+  grad_clip: 1.0
   output_dir: runs
   seed: 42
 
@@ -106,4 +106,3 @@ networks/            # EDM and EDM2 U-Net implementations
 * [Elucidating the Design Space of Diffusion-Based Generative Models](https://arxiv.org/abs/2206.00364)
 * [EDM2](https://arxiv.org/abs/2311.18828)
 
-This implementation is intentionally minimal: no Lightning, WandB, or Hydra runtime. Logging relies on tqdm progress bars and the callback outputs.
