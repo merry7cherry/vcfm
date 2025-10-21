@@ -172,7 +172,13 @@ class VariationallyCoupledFlowMatching(nn.Module):
     # ------------------------------------------------------------------
     def losses(
         self, x_1: torch.Tensor, *, class_labels: Optional[torch.Tensor] = None
-    ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
+    ) -> Tuple[
+        torch.Tensor,
+        torch.Tensor,
+        Dict[str, torch.Tensor],
+        Dict[str, torch.Tensor],
+        Dict[str, torch.Tensor],
+    ]:
         device = x_1.device
         batch = x_1.shape[0]
 
@@ -284,7 +290,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
             "phi_loss": phi_loss.detach(),
         }
 
-        return theta_loss, phi_loss, log_dict
+        return theta_loss, phi_loss, log_dict, theta_components, phi_components
 
     # ------------------------------------------------------------------
     # Sampling
