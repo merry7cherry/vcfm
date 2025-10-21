@@ -37,8 +37,10 @@ class ModelConfig:
     coupling_weight_decay: float
     sigma_min: float
     sigma_max: float
-    straightness_weight: float
-    kl_weight: float
+    flow_matching_theta_weight: float
+    straightness_theta_weight: float
+    straightness_phi_weight: float
+    kl_phi_weight: float
     min_log_std: float
     max_log_std: float
 

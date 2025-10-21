@@ -96,8 +96,10 @@ class VariationallyCoupledFlowMatching(nn.Module):
         *,
         sigma_min: float,
         sigma_max: float,
-        straightness_weight: float,
-        kl_weight: float,
+        flow_matching_theta_weight: float,
+        straightness_theta_weight: float,
+        straightness_phi_weight: float,
+        kl_phi_weight: float,
         label_dim: int,
     ) -> None:
         super().__init__()
@@ -105,8 +107,10 @@ class VariationallyCoupledFlowMatching(nn.Module):
         self.coupling_net = coupling_net
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
-        self.straightness_weight = straightness_weight
-        self.kl_weight = kl_weight
+        self.flow_matching_theta_weight = flow_matching_theta_weight
+        self.straightness_theta_weight = straightness_theta_weight
+        self.straightness_phi_weight = straightness_phi_weight
+        self.kl_phi_weight = kl_phi_weight
         self.label_dim = label_dim
 
     # ------------------------------------------------------------------
@@ -192,60 +196,95 @@ class VariationallyCoupledFlowMatching(nn.Module):
         x_t = x_t.requires_grad_(True)
         u = (x_1 - x_0).detach()
 
-        # Flow matching loss (theta step)
-        x_t_detached = x_t.detach()
-        t_detached = t.detach()
-        labels_detached = (
-            class_labels.detach() if class_labels is not None else None
-        )
-        pred = self.velocity(x_t_detached, t_detached, labels_detached)
-        fm_loss = ((pred - u) ** 2).reshape(batch, -1).mean(dim=1).mean()
+        labels_detached = class_labels.detach() if class_labels is not None else None
 
-        # Straightness loss (phi step)
-        # pred_phi = self._velocity_forward(
-        #     x_t, t, labels_detached, detach_params=True
-        # )
-        # tangent_x = pred_phi.detach()
-        tangent_x = (x_1 - x_0).detach()  # u = (x_1 - x_0)
-        tangent_t = torch.ones_like(t)
-
-        def phi_fn(x_in: torch.Tensor, t_in: torch.Tensor) -> torch.Tensor:
-            return self._velocity_forward(
-                x_in,
-                t_in,
-                labels_detached,
-                detach_params=True,
+        def _total_time_derivative(
+            fn, inputs: Tuple[torch.Tensor, torch.Tensor], tangents: Tuple[torch.Tensor, torch.Tensor]
+        ) -> torch.Tensor:
+            _, derivative = autograd_jvp(
+                fn,
+                inputs,
+                tangents,
+                create_graph=True,
+                strict=True,
             )
+            return derivative
 
-        _, total_derivative = autograd_jvp(
-            phi_fn,
+        def _velocity_fn(detach_params: bool):
+            def wrapped(x_in: torch.Tensor, t_in: torch.Tensor) -> torch.Tensor:
+                return self._velocity_forward(
+                    x_in,
+                    t_in,
+                    labels_detached,
+                    detach_params=detach_params,
+                )
+
+            return wrapped
+
+        # Theta (velocity network) objectives -------------------------------------------------
+        x_t_theta = x_t.detach().clone().requires_grad_(True)
+        t_theta = t.detach().clone().requires_grad_(True)
+        tangent_theta = ((x_1 - x_0).detach(), torch.ones_like(t_theta))
+
+        fm_residual = self.velocity(x_t_theta, t_theta, labels_detached) - u
+        fm_loss = fm_residual.reshape(batch, -1).pow(2).mean(dim=1).mean()
+
+        total_derivative_theta = _total_time_derivative(
+            _velocity_fn(detach_params=False),
+            (x_t_theta, t_theta),
+            tangent_theta,
+        )
+        straightness_loss_theta = (
+            total_derivative_theta.reshape(batch, -1).pow(2).sum(dim=1).mean()
+        )
+
+        theta_components = {
+            "flow_matching_theta_loss": fm_loss,
+            "straightness_theta_loss": straightness_loss_theta,
+        }
+        theta_loss = (
+            self.flow_matching_theta_weight * theta_components["flow_matching_theta_loss"]
+            + self.straightness_theta_weight * theta_components["straightness_theta_loss"]
+        )
+
+        # Phi (coupling network) objectives ---------------------------------------------------
+        tangent_phi = ((x_1 - x_0).detach(), torch.ones_like(t))
+        total_derivative_phi = _total_time_derivative(
+            _velocity_fn(detach_params=True),
             (x_t, t),
-            (tangent_x, tangent_t),
-            create_graph=True,
-            strict=True,
+            tangent_phi,
         )
-        straightness_loss = (
-            total_derivative.reshape(batch, -1).pow(2).sum(dim=1).mean()
+        straightness_loss_phi = (
+            total_derivative_phi.reshape(batch, -1).pow(2).sum(dim=1).mean()
         )
 
-        # KL regularization
-        kl = 0.5 * (
+        kl_phi_loss = 0.5 * (
             (mu.pow(2) + sigma.pow(2) - 1.0 - 2.0 * log_sigma)
             .reshape(batch, -1)
             .sum(dim=1)
             .mean()
         )
 
-        phi_loss = self.straightness_weight * straightness_loss + self.kl_weight * kl
+        phi_components = {
+            "straightness_phi_loss": straightness_loss_phi,
+            "kl_phi_loss": kl_phi_loss,
+        }
+        phi_loss = (
+            self.straightness_phi_weight * phi_components["straightness_phi_loss"]
+            + self.kl_phi_weight * phi_components["kl_phi_loss"]
+        )
 
+        component_logs = {
+            **{name: value.detach() for name, value in theta_components.items()},
+            **{name: value.detach() for name, value in phi_components.items()},
+        }
         log_dict = {
-            "flow_matching_loss": fm_loss.detach(),
-            "straightness_loss": straightness_loss.detach(),
-            "kl_loss": kl.detach(),
+            **component_logs,
+            "theta_loss": theta_loss.detach(),
             "phi_loss": phi_loss.detach(),
         }
 
-        return fm_loss, phi_loss, log_dict
+        return theta_loss, phi_loss, log_dict
 
     # ------------------------------------------------------------------
     # Sampling

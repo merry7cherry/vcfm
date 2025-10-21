@@ -107,16 +107,28 @@ def main() -> None:
         help="Batch size for training dataloader (overrides dataset config)",
     )
     parser.add_argument(
-        "--straightness-weight",
+        "--flow-matching-theta-weight",
         type=float,
         default=None,
-        help="Straightness loss weight (overrides model config)",
+        help="Flow matching loss weight for the velocity network (overrides model config)",
     )
     parser.add_argument(
-        "--kl-weight",
+        "--straightness-theta-weight",
         type=float,
         default=None,
-        help="KL loss weight (overrides model config)",
+        help="Straightness loss weight applied to velocity optimization (overrides model config)",
+    )
+    parser.add_argument(
+        "--straightness-phi-weight",
+        type=float,
+        default=None,
+        help="Straightness loss weight applied to the coupling network (overrides model config)",
+    )
+    parser.add_argument(
+        "--kl-phi-weight",
+        type=float,
+        default=None,
+        help="KL loss weight applied to the coupling network (overrides model config)",
     )
     parser.add_argument(
         "--ema-rate",
@@ -139,20 +151,26 @@ def main() -> None:
 
     if args.batch_size is not None:
         cfg.dataset.batch_size = args.batch_size
-    if args.straightness_weight is not None:
-        cfg.model.straightness_weight = args.straightness_weight
-    if args.kl_weight is not None:
-        cfg.model.kl_weight = args.kl_weight
+    if args.flow_matching_theta_weight is not None:
+        cfg.model.flow_matching_theta_weight = args.flow_matching_theta_weight
+    if args.straightness_theta_weight is not None:
+        cfg.model.straightness_theta_weight = args.straightness_theta_weight
+    if args.straightness_phi_weight is not None:
+        cfg.model.straightness_phi_weight = args.straightness_phi_weight
+    if args.kl_phi_weight is not None:
+        cfg.model.kl_phi_weight = args.kl_phi_weight
     if args.ema_rate is not None:
         cfg.model.ema_rate = args.ema_rate
 
     dataset_name = cfg.dataset.name.lower()
     batch_size = cfg.dataset.batch_size
-    run_name = "{}_b{}_kl_{}_st_{}_ema_{}".format(
+    run_name = "{}_b{}_fmth_{}_stt_{}_stp_{}_klp_{}_ema_{}".format(
         dataset_name,
         batch_size,
-        _format_hparam(cfg.model.kl_weight),
-        _format_hparam(cfg.model.straightness_weight),
+        _format_hparam(cfg.model.flow_matching_theta_weight),
+        _format_hparam(cfg.model.straightness_theta_weight),
+        _format_hparam(cfg.model.straightness_phi_weight),
+        _format_hparam(cfg.model.kl_phi_weight),
         _format_hparam(cfg.model.ema_rate),
     )
 

@@ -101,8 +101,10 @@ def build_model(
         coupling_net=coupling,
         sigma_min=cfg.model.sigma_min,
         sigma_max=cfg.model.sigma_max,
-        straightness_weight=cfg.model.straightness_weight,
-        kl_weight=cfg.model.kl_weight,
+        flow_matching_theta_weight=cfg.model.flow_matching_theta_weight,
+        straightness_theta_weight=cfg.model.straightness_theta_weight,
+        straightness_phi_weight=cfg.model.straightness_phi_weight,
+        kl_phi_weight=cfg.model.kl_phi_weight,
         label_dim=label_dim,
     )
     return model

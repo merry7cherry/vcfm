@@ -194,8 +194,8 @@ class Trainer:
             class_labels = self._format_labels(raw_labels, inputs)
 
             self.opt_theta.zero_grad(set_to_none=True)
-            fm_loss, phi_loss, logs = self.model.losses(inputs, class_labels=class_labels)
-            fm_loss.backward(retain_graph=True)
+            theta_loss, phi_loss, logs = self.model.losses(inputs, class_labels=class_labels)
+            theta_loss.backward(retain_graph=True)
             if grad_clip is not None:
                 torch.nn.utils.clip_grad_norm_(self.model.velocity_parameters(), grad_clip)
             self.opt_theta.step()
@@ -210,14 +210,14 @@ class Trainer:
                 self.ema.update(self.model, self.global_step + 1)
 
             logs = {key: float(value) for key, value in logs.items()}
-            logs["fm_loss"] = float(fm_loss.detach())
+            logs["theta_loss"] = float(theta_loss.detach())
             logs["phi_loss"] = float(phi_loss.detach())
             progress.set_postfix(
                 {
-                    "fm": logs.get("flow_matching_loss", logs.get("fm_loss", 0.0)),
-                    "straightness": logs.get("straightness_loss", 0.0),
-                    "kl": logs.get("kl_loss", 0.0),
-                    "phi": logs.get("phi_loss", 0.0),
+                    "fmθ": logs.get("flow_matching_theta_loss", logs.get("theta_loss", 0.0)),
+                    "strθ": logs.get("straightness_theta_loss", 0.0),
+                    "strφ": logs.get("straightness_phi_loss", 0.0),
+                    "klφ": logs.get("kl_phi_loss", 0.0),
                 }
             )
 
