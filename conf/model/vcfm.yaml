@@ -5,7 +5,7 @@ ema_type: 'traditional'
 class_conditional: True
 
 velocity_learning_rate: 0.0002
-coupling_learning_rate: 0.001
+coupling_learning_rate: 0.0002
 velocity_weight_decay: 0.0
 coupling_weight_decay: 0.0
 
@@ -17,8 +17,8 @@ straightness_phi_weight: 1.0
 kl_phi_weight: 1.0
 min_log_std: -5.0
 max_log_std: 3.0
-phi_warmup_steps: 10000
-theta_warmup_steps: 10000
-early_training_steps: 100000
-late_training_steps: 150000
-final_training_steps: 130000
+phi_warmup_steps: 100
+theta_warmup_steps: 1000
+early_training_steps: 10000
+late_training_steps: 10000
+final_training_steps: 30000
