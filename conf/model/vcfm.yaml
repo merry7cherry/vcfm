@@ -14,7 +14,7 @@ sigma_max: 80.0
 flow_matching_theta_weight: 1.0
 straightness_theta_weight: 0
 straightness_phi_weight: 1.0
-kl_phi_weight: 1.0
+kl_phi_weight: 100.0
 min_log_std: -5.0
 max_log_std: 3.0
 phi_warmup_steps: 100
