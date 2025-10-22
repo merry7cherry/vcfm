@@ -233,18 +233,8 @@ class VariationallyCoupledFlowMatching(nn.Module):
         fm_residual = self.velocity(x_t_theta, t_theta, labels_detached) - u
         fm_loss = fm_residual.reshape(batch, -1).pow(2).mean(dim=1).mean()
 
-        total_derivative_theta = _total_time_derivative(
-            _velocity_fn(detach_params=False),
-            (x_t_theta, t_theta),
-            tangent_theta,
-        )
-        straightness_loss_theta = (
-            total_derivative_theta.reshape(batch, -1).pow(2).sum(dim=1).mean()
-        )
-
         theta_components = {
             "flow_matching_theta_loss": fm_loss,
-            "straightness_theta_loss": straightness_loss_theta,
         }
         theta_loss = self.flow_matching_theta_weight * theta_components[
             "flow_matching_theta_loss"
