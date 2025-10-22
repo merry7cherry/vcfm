@@ -136,6 +136,36 @@ def main() -> None:
         default=None,
         help="EMA decay rate (overrides model config)",
     )
+    parser.add_argument(
+        "--phi-warmup-steps",
+        type=int,
+        default=None,
+        help="Number of iterations in the phi warmup stage (overrides model config)",
+    )
+    parser.add_argument(
+        "--theta-warmup-steps",
+        type=int,
+        default=None,
+        help="Number of iterations in the theta warmup stage (overrides model config)",
+    )
+    parser.add_argument(
+        "--early-training-steps",
+        type=int,
+        default=None,
+        help="Number of iterations in the early training stage (overrides model config)",
+    )
+    parser.add_argument(
+        "--late-training-steps",
+        type=int,
+        default=None,
+        help="Number of iterations in the late training stage (overrides model config)",
+    )
+    parser.add_argument(
+        "--final-training-steps",
+        type=int,
+        default=None,
+        help="Number of iterations in the final training stage (overrides model config)",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -161,10 +191,20 @@ def main() -> None:
         cfg.model.kl_phi_weight = args.kl_phi_weight
     if args.ema_rate is not None:
         cfg.model.ema_rate = args.ema_rate
+    if args.phi_warmup_steps is not None:
+        cfg.model.phi_warmup_steps = args.phi_warmup_steps
+    if args.theta_warmup_steps is not None:
+        cfg.model.theta_warmup_steps = args.theta_warmup_steps
+    if args.early_training_steps is not None:
+        cfg.model.early_training_steps = args.early_training_steps
+    if args.late_training_steps is not None:
+        cfg.model.late_training_steps = args.late_training_steps
+    if args.final_training_steps is not None:
+        cfg.model.final_training_steps = args.final_training_steps
 
     dataset_name = cfg.dataset.name.lower()
     batch_size = cfg.dataset.batch_size
-    run_name = "{}_b{}_fmth_{}_stt_{}_stp_{}_klp_{}_ema_{}".format(
+    run_name = "{}_b{}_fmth_{}_stt_{}_stp_{}_klp_{}_ema_{}_pwu_{}_twu_{}_early_{}_late_{}_final_{}".format(
         dataset_name,
         batch_size,
         _format_hparam(cfg.model.flow_matching_theta_weight),
@@ -172,6 +212,11 @@ def main() -> None:
         _format_hparam(cfg.model.straightness_phi_weight),
         _format_hparam(cfg.model.kl_phi_weight),
         _format_hparam(cfg.model.ema_rate),
+        cfg.model.phi_warmup_steps,
+        cfg.model.theta_warmup_steps,
+        cfg.model.early_training_steps,
+        cfg.model.late_training_steps,
+        cfg.model.final_training_steps,
     )
 
     output_base = Path(args.output) if args.output else Path(cfg.training.output_dir)

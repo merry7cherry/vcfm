@@ -171,7 +171,11 @@ class VariationallyCoupledFlowMatching(nn.Module):
     # Losses
     # ------------------------------------------------------------------
     def losses(
-        self, x_1: torch.Tensor, *, class_labels: Optional[torch.Tensor] = None
+        self,
+        x_1: torch.Tensor,
+        *,
+        class_labels: Optional[torch.Tensor] = None,
+        include_phi_straightness: bool = True,
     ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         device = x_1.device
         batch = x_1.shape[0]
@@ -242,10 +246,9 @@ class VariationallyCoupledFlowMatching(nn.Module):
             "flow_matching_theta_loss": fm_loss,
             "straightness_theta_loss": straightness_loss_theta,
         }
-        theta_loss = (
-            self.flow_matching_theta_weight * theta_components["flow_matching_theta_loss"]
-            + self.straightness_theta_weight * theta_components["straightness_theta_loss"]
-        )
+        theta_loss = self.flow_matching_theta_weight * theta_components[
+            "flow_matching_theta_loss"
+        ]
 
         # Phi (coupling network) objectives ---------------------------------------------------
         tangent_phi = ((x_1 - x_0).detach(), torch.ones_like(t))
@@ -269,10 +272,11 @@ class VariationallyCoupledFlowMatching(nn.Module):
             "straightness_phi_loss": straightness_loss_phi,
             "kl_phi_loss": kl_phi_loss,
         }
-        phi_loss = (
-            self.straightness_phi_weight * phi_components["straightness_phi_loss"]
-            + self.kl_phi_weight * phi_components["kl_phi_loss"]
-        )
+        phi_loss = self.kl_phi_weight * phi_components["kl_phi_loss"]
+        if include_phi_straightness:
+            phi_loss = phi_loss + self.straightness_phi_weight * phi_components[
+                "straightness_phi_loss"
+            ]
 
         component_logs = {
             **{name: value.detach() for name, value in theta_components.items()},
