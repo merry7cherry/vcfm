@@ -136,6 +136,30 @@ def main() -> None:
         default=None,
         help="EMA decay rate (overrides model config)",
     )
+    parser.add_argument(
+        "--phi-warmup-iters",
+        type=int,
+        default=None,
+        help="Number of iterations in the phi warmup stage (overrides training config)",
+    )
+    parser.add_argument(
+        "--theta-warmup-iters",
+        type=int,
+        default=None,
+        help="Number of iterations in the theta warmup stage (overrides training config)",
+    )
+    parser.add_argument(
+        "--early-phase-iters",
+        type=int,
+        default=None,
+        help="Number of iterations in the early training stage (overrides training config)",
+    )
+    parser.add_argument(
+        "--late-phase-iters",
+        type=int,
+        default=None,
+        help="Number of iterations in the late training stage (overrides training config)",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -161,6 +185,14 @@ def main() -> None:
         cfg.model.kl_phi_weight = args.kl_phi_weight
     if args.ema_rate is not None:
         cfg.model.ema_rate = args.ema_rate
+    if args.phi_warmup_iters is not None:
+        cfg.training.phi_warmup_iters = args.phi_warmup_iters
+    if args.theta_warmup_iters is not None:
+        cfg.training.theta_warmup_iters = args.theta_warmup_iters
+    if args.early_phase_iters is not None:
+        cfg.training.early_phase_iters = args.early_phase_iters
+    if args.late_phase_iters is not None:
+        cfg.training.late_phase_iters = args.late_phase_iters
 
     dataset_name = cfg.dataset.name.lower()
     batch_size = cfg.dataset.batch_size

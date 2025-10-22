@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -37,8 +38,7 @@ def _prepare_batch(batch, device: torch.device) -> Tuple[torch.Tensor, Optional[
 
 
 class EMA:
-    def __init__(self, model: nn.Module, decay: float, ema_type: str) -> None:
-        self.decay = decay
+    def __init__(self, model: nn.Module, ema_type: str) -> None:
         self.ema_type = ema_type
         self.model = copy.deepcopy(model).eval()
 
@@ -46,16 +46,53 @@ class EMA:
         self.model.to(device)
 
     @torch.no_grad()
-    def update(self, model: nn.Module, step: int) -> None:
-        decay = self.decay
-        if self.ema_type == "power":
-            decay = 1.0 - power_function_beta(self.decay, step)
-        for ema_param, param in zip(self.model.parameters(), model.parameters()):
-            ema_param.data.mul_(decay).add_(param.data, alpha=1.0 - decay)
+    def update(
+        self,
+        model: nn.Module,
+        step: int,
+        *,
+        theta_decay: float,
+        phi_decay: float,
+        default_decay: Optional[float] = None,
+    ) -> None:
+        def _resolve(decay_value: float) -> float:
+            if self.ema_type == "power":
+                return 1.0 - power_function_beta(decay_value, step)
+            return decay_value
+
+        theta_resolved = _resolve(theta_decay)
+        phi_resolved = _resolve(phi_decay)
+        fallback_decay = _resolve(
+            default_decay if default_decay is not None else max(theta_decay, phi_decay)
+        )
+
+        for (ema_name, ema_param), (name, param) in zip(
+            self.model.named_parameters(), model.named_parameters()
+        ):
+            if ema_name != name:
+                raise RuntimeError(
+                    "EMA model parameter order does not match source model order."
+                )
+            if name.startswith("velocity_net"):
+                decay_value = theta_resolved
+            elif name.startswith("coupling_net"):
+                decay_value = phi_resolved
+            else:
+                decay_value = fallback_decay
+            ema_param.data.mul_(decay_value).add_(param.data, alpha=1.0 - decay_value)
         model_buffers = dict(model.named_buffers())
         for name, ema_buf in self.model.named_buffers():
             if name in model_buffers:
                 ema_buf.copy_(model_buffers[name])
+
+
+@dataclass(frozen=True)
+class TrainingStage:
+    name: str
+    end_step: Optional[int]
+    phi_loss_weights: Dict[str, float]
+    theta_ema_decay: float
+    phi_ema_decay: float
 
 
 class Trainer:
@@ -86,8 +123,11 @@ class Trainer:
         self.use_ema = cfg.model.use_ema
         self.ema: Optional[EMA] = None
         if self.use_ema:
-            self.ema = EMA(self.model, cfg.model.ema_rate, cfg.model.ema_type)
+            self.ema = EMA(self.model, cfg.model.ema_type)
             self.ema.to(self.device)
+
+        self.training_stages = self._build_training_stages()
+        self._current_stage_index: Optional[int] = None
 
         self.opt_theta = AdamW(
             self.model.velocity_parameters(),
@@ -101,6 +141,98 @@ class Trainer:
             betas=(0.9, 0.99),
             weight_decay=cfg.model.coupling_weight_decay,
         )
+
+    # ------------------------------------------------------------------
+    # Training stage management
+    # ------------------------------------------------------------------
+    def _build_training_stages(self) -> List[TrainingStage]:
+        total_steps = self.cfg.model.total_training_steps
+        cumulative = 0
+
+        def add_stage(
+            stages: List[TrainingStage],
+            *,
+            name: str,
+            length: int,
+            phi_loss_weights: Dict[str, float],
+            theta_ema_decay: float,
+            phi_ema_decay: float,
+        ) -> None:
+            nonlocal cumulative
+            if length <= 0 or cumulative >= total_steps:
+                return
+            cumulative = min(cumulative + length, total_steps)
+            stages.append(
+                TrainingStage(
+                    name=name,
+                    end_step=cumulative,
+                    phi_loss_weights=dict(phi_loss_weights),
+                    theta_ema_decay=theta_ema_decay,
+                    phi_ema_decay=phi_ema_decay,
+                )
+            )
+
+        stages: List[TrainingStage] = []
+        phi_only_kl = {
+            "straightness_phi_loss": 0.0,
+            "kl_phi_loss": self.model.kl_phi_weight,
+        }
+        phi_full = {
+            "straightness_phi_loss": self.model.straightness_phi_weight,
+            "kl_phi_loss": self.model.kl_phi_weight,
+        }
+
+        add_stage(
+            stages,
+            name="phi_warmup",
+            length=self.cfg.training.phi_warmup_iters,
+            phi_loss_weights=phi_only_kl,
+            theta_ema_decay=0.99,
+            phi_ema_decay=0.9,
+        )
+        add_stage(
+            stages,
+            name="theta_warmup",
+            length=self.cfg.training.theta_warmup_iters,
+            phi_loss_weights=phi_only_kl,
+            theta_ema_decay=0.9,
+            phi_ema_decay=0.99,
+        )
+        add_stage(
+            stages,
+            name="early_training",
+            length=self.cfg.training.early_phase_iters,
+            phi_loss_weights=phi_full,
+            theta_ema_decay=0.99,
+            phi_ema_decay=0.9999,
+        )
+        add_stage(
+            stages,
+            name="late_training",
+            length=self.cfg.training.late_phase_iters,
+            phi_loss_weights=phi_full,
+            theta_ema_decay=0.99,
+            phi_ema_decay=0.999,
+        )
+
+        stages.append(
+            TrainingStage(
+                name="final_training",
+                end_step=None,
+                phi_loss_weights=dict(phi_full),
+                theta_ema_decay=0.99,
+                phi_ema_decay=0.99,
+            )
+        )
+        return stages
+
+    def _get_stage_for_step(self, step: int) -> Tuple[TrainingStage, int]:
+        for index, stage in enumerate(self.training_stages):
+            if stage.end_step is None or step < stage.end_step:
+                return stage, index
+        # Fallback to the final stage
+        final_index = len(self.training_stages) - 1
+        return self.training_stages[final_index], final_index
 
     # ------------------------------------------------------------------
     # Logging utilities
@@ -204,7 +336,7 @@ class Trainer:
         ema_state = checkpoint.get("ema")
         if ema_state is not None and self.use_ema:
             if self.ema is None:
-                self.ema = EMA(self.model, self.cfg.model.ema_rate, self.cfg.model.ema_type)
+                self.ema = EMA(self.model, self.cfg.model.ema_type)
                 self.ema.to(self.device)
             self.ema.model.load_state_dict(ema_state, strict=strict)
 
@@ -253,6 +385,11 @@ class Trainer:
             inputs, raw_labels = _prepare_batch(batch, self.device)
             class_labels = self._format_labels(raw_labels, inputs)
 
+            stage, stage_index = self._get_stage_for_step(self.global_step)
+            if stage_index != self._current_stage_index:
+                print(f"[Trainer] Entering stage '{stage.name}' at step {self.global_step}")
+                self._current_stage_index = stage_index
+
             self.opt_theta.zero_grad(set_to_none=True)
             (
                 theta_loss,
@@ -260,7 +397,11 @@ class Trainer:
                 logs,
                 theta_components,
                 phi_components,
-            ) = self.model.losses(inputs, class_labels=class_labels)
+            ) = self.model.losses(
+                inputs,
+                class_labels=class_labels,
+                phi_loss_weights=stage.phi_loss_weights,
+            )
             velocity_params = list(self.model.velocity_net.named_parameters())
             for component_name, component_loss in theta_components.items():
                 component_grads = self._component_gradients(
@@ -299,7 +440,12 @@ class Trainer:
             self.opt_phi.step()
 
             if self.ema is not None:
-                self.ema.update(self.model, self.global_step + 1)
+                self.ema.update(
+                    self.model,
+                    self.global_step + 1,
+                    theta_decay=stage.theta_ema_decay,
+                    phi_decay=stage.phi_ema_decay,
+                )
 
             logs = {key: float(value) for key, value in logs.items()}
             logs["theta_loss"] = float(theta_loss.detach())
@@ -310,6 +456,7 @@ class Trainer:
                     "strθ": logs.get("straightness_theta_loss", 0.0),
                     "strφ": logs.get("straightness_phi_loss", 0.0),
                     "klφ": logs.get("kl_phi_loss", 0.0),
+                    "stage": stage.name,
                 }
             )
 

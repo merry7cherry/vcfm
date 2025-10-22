@@ -71,6 +71,10 @@ class TrainingConfig:
     grad_clip: Optional[float] = None
     output_dir: str = "runs"
     seed: int = 42
+    phi_warmup_iters: int = 0
+    theta_warmup_iters: int = 0
+    early_phase_iters: int = 0
+    late_phase_iters: int = 0
 
 
 @dataclass

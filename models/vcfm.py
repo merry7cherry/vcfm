@@ -1,6 +1,6 @@
 import math
 from collections import OrderedDict
-from typing import Dict, Optional, Tuple
+from typing import Dict, Mapping, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -171,7 +171,11 @@ class VariationallyCoupledFlowMatching(nn.Module):
     # Losses
     # ------------------------------------------------------------------
     def losses(
-        self, x_1: torch.Tensor, *, class_labels: Optional[torch.Tensor] = None
+        self,
+        x_1: torch.Tensor,
+        *,
+        class_labels: Optional[torch.Tensor] = None,
+        phi_loss_weights: Optional[Mapping[str, float]] = None,
     ) -> Tuple[
         torch.Tensor,
         torch.Tensor,
@@ -248,10 +252,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
             "flow_matching_theta_loss": fm_loss,
             "straightness_theta_loss": straightness_loss_theta,
         }
-        theta_loss = (
-            self.flow_matching_theta_weight * theta_components["flow_matching_theta_loss"]
-            + self.straightness_theta_weight * theta_components["straightness_theta_loss"]
-        )
+        theta_loss = self.flow_matching_theta_weight * theta_components["flow_matching_theta_loss"]
 
         # Phi (coupling network) objectives ---------------------------------------------------
         tangent_phi = ((x_1 - x_0).detach(), torch.ones_like(t))
@@ -275,9 +276,14 @@ class VariationallyCoupledFlowMatching(nn.Module):
             "straightness_phi_loss": straightness_loss_phi,
             "kl_phi_loss": kl_phi_loss,
         }
-        phi_loss = (
-            self.straightness_phi_weight * phi_components["straightness_phi_loss"]
-            + self.kl_phi_weight * phi_components["kl_phi_loss"]
+        if phi_loss_weights is None:
+            phi_loss_weights = {
+                "straightness_phi_loss": self.straightness_phi_weight,
+                "kl_phi_loss": self.kl_phi_weight,
+            }
+        phi_loss = sum(
+            phi_loss_weights.get(name, 0.0) * component
+            for name, component in phi_components.items()
         )
 
         component_logs = {

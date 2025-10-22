@@ -12,6 +12,10 @@ training:
   grad_clip: 1.0
   output_dir: runs
   seed: 42
+  phi_warmup_iters: 0
+  theta_warmup_iters: 0
+  early_phase_iters: 0
+  late_phase_iters: 0
 
 callbacks:
   generate: true
