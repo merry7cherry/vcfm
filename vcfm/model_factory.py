@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import copy
 import pickle
 
 import dnnlib
 import torch
 
-from models.vcfm import GaussianCoupling, VariationallyCoupledFlowMatching
+from models.vcfm import LatentEncoder, VariationallyCoupledFlowMatching
 from networks.edm_networks import SongUNet
 from networks.networks_edm2 import EDM2
 from torch_utils import misc
@@ -20,6 +19,8 @@ def _build_velocity_net(cfg: Config, out_channels: int) -> torch.nn.Module:
     label_dim = dataset.label_dim if cfg.model.class_conditional else 0
 
     print(f"Building net with num_blocks: {net_cfg.num_blocks}")
+
+    latent_dim = cfg.model.latent_dim
 
     if net_cfg.name == "edm":
         net = SongUNet(
@@ -36,6 +37,7 @@ def _build_velocity_net(cfg: Config, out_channels: int) -> torch.nn.Module:
             channel_mult=list(net_cfg.channel_mult or []),
             dropout=net_cfg.dropout,
             num_blocks=net_cfg.num_blocks,
+            latent_dim=latent_dim,
         )
     elif net_cfg.name == "edm2":
         net = EDM2(
@@ -48,6 +50,7 @@ def _build_velocity_net(cfg: Config, out_channels: int) -> torch.nn.Module:
             dropout=net_cfg.dropout,
             dropout_res=net_cfg.dropout_res,
             num_blocks=net_cfg.num_blocks,
+            latent_dim=latent_dim,
         )
     else:
         raise NotImplementedError(f"Unsupported network {net_cfg.name}")
@@ -70,41 +73,34 @@ def _build_velocity_net(cfg: Config, out_channels: int) -> torch.nn.Module:
     return net
 
 
-def build_model(
-    cfg: Config, *, coupling_num_blocks: int | None = None
-) -> VariationallyCoupledFlowMatching:
+def _build_latent_encoder(cfg: Config) -> LatentEncoder:
+    dataset = cfg.dataset
+    label_dim = dataset.label_dim if cfg.model.class_conditional else 0
+    return LatentEncoder(
+        in_channels=dataset.in_channels,
+        latent_dim=cfg.model.latent_dim,
+        hidden_channels=cfg.model.phi_hidden_channels,
+        num_layers=cfg.model.phi_num_layers,
+        label_dim=label_dim,
+    )
+
+
+def build_model(cfg: Config) -> VariationallyCoupledFlowMatching:
     assert cfg.model.name == "vcfm"
     print(f"Building generation model with num_blocks: {cfg.network.num_blocks}")
     velocity_net = _build_velocity_net(cfg, cfg.dataset.out_channels)
-
-    coupling_cfg = copy.deepcopy(cfg)
-    coupling_out_channels = cfg.dataset.out_channels * 2
-    coupling_cfg.dataset.out_channels = coupling_out_channels
-    coupling_cfg.network.reload_url = ""
-    if coupling_num_blocks is not None:
-        if coupling_num_blocks <= 0:
-            raise ValueError("coupling_num_blocks must be a positive integer.")
-        coupling_cfg.network.num_blocks = coupling_num_blocks
-    print(f"Building coupling model with num_blocks: {coupling_cfg.network.num_blocks}")
-    coupling_net = _build_velocity_net(coupling_cfg, coupling_out_channels)
-
     label_dim = cfg.dataset.label_dim if cfg.model.class_conditional else 0
-    coupling = GaussianCoupling(
-        coupling_net,
-        label_dim=label_dim,
-        min_log_std=cfg.model.min_log_std,
-        max_log_std=cfg.model.max_log_std,
-    )
+    latent_encoder = _build_latent_encoder(cfg)
 
     model = VariationallyCoupledFlowMatching(
         velocity_net=velocity_net,
-        coupling_net=coupling,
+        latent_encoder=latent_encoder,
         sigma_min=cfg.model.sigma_min,
         sigma_max=cfg.model.sigma_max,
         flow_matching_theta_weight=cfg.model.flow_matching_theta_weight,
-        straightness_theta_weight=cfg.model.straightness_theta_weight,
-        straightness_phi_weight=cfg.model.straightness_phi_weight,
+        straightness_weight=cfg.model.straightness_weight,
         kl_phi_weight=cfg.model.kl_phi_weight,
         label_dim=label_dim,
+        latent_dim=cfg.model.latent_dim,
     )
     return model

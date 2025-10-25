@@ -271,6 +271,7 @@ class SongUNet(torch.nn.Module):
                  encoder_type='standard',  # Encoder architecture: 'standard' for DDPM++, 'residual' for NCSN++.
                  decoder_type='standard',  # Decoder architecture: 'standard' for both DDPM++ and NCSN++.
                  resample_filter=[1, 1],  # Resampling filter: [1,1] for DDPM++, [1,3,3,1] for NCSN++.
+                 latent_dim=0,
                  ):
         assert embedding_type in ['fourier', 'positional']
         assert encoder_type in ['standard', 'skip', 'residual']
@@ -299,6 +300,12 @@ class SongUNet(torch.nn.Module):
                                   **init) if augment_dim else None
         self.map_layer0 = Linear(in_features=noise_channels, out_features=emb_channels, **init)
         self.map_layer1 = Linear(in_features=emb_channels, out_features=emb_channels, **init)
+        self.latent_dim = latent_dim
+        self.map_latent = (
+            Linear(in_features=latent_dim, out_features=noise_channels, bias=False, **init)
+            if latent_dim > 0
+            else None
+        )
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
@@ -355,7 +362,7 @@ class SongUNet(torch.nn.Module):
                                                            **init_zero)
 
 
-    def forward(self, x, noise_labels, class_labels, augment_labels=None):
+    def forward(self, x, noise_labels, class_labels, latent_z=None, augment_labels=None):
         # Mapping.
         emb = self.map_noise(noise_labels)
         emb = emb.reshape(emb.shape[0], 2, -1).flip(1).reshape(*emb.shape)  # swap sin/cos
@@ -365,6 +372,12 @@ class SongUNet(torch.nn.Module):
             if self.training and self.label_dropout:
                 tmp = tmp * (torch.rand([x.shape[0], 1], device=x.device) >= self.label_dropout).to(tmp.dtype)
             emb = emb + self.map_label(tmp * np.sqrt(self.map_label.in_features))
+        if self.map_latent is not None:
+            if latent_z is None:
+                raise ValueError(
+                    "Latent conditioning is enabled but no latent_z tensor was provided."
+                )
+            emb = emb + self.map_latent(latent_z.to(emb.dtype))
         if self.map_augment is not None and augment_labels is not None:
             emb = emb + self.map_augment(augment_labels)
         emb = silu(self.map_layer0(emb))
