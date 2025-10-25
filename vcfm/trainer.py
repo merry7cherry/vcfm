@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -42,20 +43,55 @@ class EMA:
         self.ema_type = ema_type
         self.model = copy.deepcopy(model).eval()
 
+    def _compute_decay(self, base_decay: float, step: int) -> float:
+        if self.ema_type == "power":
+            return 1.0 - power_function_beta(base_decay, step)
+        return base_decay
+
     def to(self, device: torch.device) -> None:
         self.model.to(device)
 
     @torch.no_grad()
-    def update(self, model: nn.Module, step: int) -> None:
-        decay = self.decay
-        if self.ema_type == "power":
-            decay = 1.0 - power_function_beta(self.decay, step)
-        for ema_param, param in zip(self.model.parameters(), model.parameters()):
+    def update(
+        self,
+        model: nn.Module,
+        step: int,
+        *,
+        theta_decay: Optional[float] = None,
+        phi_decay: Optional[float] = None,
+    ) -> None:
+        theta_decay_value = (
+            self._compute_decay(theta_decay, step)
+            if theta_decay is not None
+            else self._compute_decay(self.decay, step)
+        )
+        phi_decay_value = (
+            self._compute_decay(phi_decay, step)
+            if phi_decay is not None
+            else self._compute_decay(self.decay, step)
+        )
+        for (_, ema_param), (name, param) in zip(
+            self.model.named_parameters(), model.named_parameters()
+        ):
+            if name.startswith("velocity_net"):
+                decay = theta_decay_value
+            elif name.startswith("coupling_net"):
+                decay = phi_decay_value
+            else:
+                decay = self._compute_decay(self.decay, step)
             ema_param.data.mul_(decay).add_(param.data, alpha=1.0 - decay)
         model_buffers = dict(model.named_buffers())
         for name, ema_buf in self.model.named_buffers():
             if name in model_buffers:
                 ema_buf.copy_(model_buffers[name])
+
+
+@dataclass
+class StageSettings:
+    name: str
+    include_phi_straightness: bool
+    theta_ema: float
+    phi_ema: float
 
 
 class Trainer:
@@ -102,6 +138,11 @@ class Trainer:
             weight_decay=cfg.model.coupling_weight_decay,
         )
 
+        self._stage_boundaries = self._build_stage_boundaries()
+        if not self._stage_boundaries:
+            raise ValueError("Training schedule must include at least one stage with positive steps.")
+        self._total_steps = self._stage_boundaries[-1][0]
+
     # ------------------------------------------------------------------
     # Logging utilities
     # ------------------------------------------------------------------
@@ -120,6 +161,77 @@ class Trainer:
             "opt_phi": self.opt_phi.state_dict(),
             "config": asdict(self.cfg),
         }
+
+    # ------------------------------------------------------------------
+    # Stage helpers
+    # ------------------------------------------------------------------
+    def _build_stage_boundaries(self) -> List[Tuple[int, StageSettings]]:
+        cfg_model = self.cfg.model
+
+        stages: List[Tuple[int, StageSettings]] = []
+        cumulative = 0
+
+        def add_stage(length: int, settings: StageSettings) -> None:
+            nonlocal cumulative
+            if length <= 0:
+                return
+            cumulative += int(length)
+            stages.append((cumulative, settings))
+
+        add_stage(
+            cfg_model.phi_warmup_steps,
+            StageSettings(
+                name="phi_warmup",
+                include_phi_straightness=False,
+                theta_ema=0.99,
+                phi_ema=0.9,
+            ),
+        )
+        add_stage(
+            cfg_model.theta_warmup_steps,
+            StageSettings(
+                name="theta_warmup",
+                include_phi_straightness=False,
+                theta_ema=0.9,
+                phi_ema=0.99,
+            ),
+        )
+        add_stage(
+            cfg_model.early_training_steps,
+            StageSettings(
+                name="early_training",
+                include_phi_straightness=True,
+                theta_ema=0.99,
+                phi_ema=0.9999,
+            ),
+        )
+        add_stage(
+            cfg_model.late_training_steps,
+            StageSettings(
+                name="late_training",
+                include_phi_straightness=True,
+                theta_ema=0.99,
+                phi_ema=0.999,
+            ),
+        )
+
+        add_stage(
+            cfg_model.final_training_steps,
+            StageSettings(
+                name="final_training",
+                include_phi_straightness=True,
+                theta_ema=0.99,
+                phi_ema=0.99,
+            ),
+        )
+
+        return stages
+
+    def _get_stage(self, step: int) -> StageSettings:
+        for boundary, stage in self._stage_boundaries:
+            if step < boundary:
+                return stage
+        return self._stage_boundaries[-1][1]
 
     def save_checkpoint(self, path: str | Path) -> None:
         checkpoint_path = Path(path)
@@ -167,7 +279,7 @@ class Trainer:
     def fit(self) -> None:
         train_loader = self.data.train
         iterator = iter(train_loader)
-        total_steps = self.cfg.model.total_training_steps
+        total_steps = self._total_steps
         log_every = self.cfg.training.log_every
         eval_every = self.cfg.training.eval_every
         sample_every = self.cfg.training.sample_every
@@ -193,8 +305,14 @@ class Trainer:
             inputs, raw_labels = _prepare_batch(batch, self.device)
             class_labels = self._format_labels(raw_labels, inputs)
 
+            stage = self._get_stage(self.global_step)
+
             self.opt_theta.zero_grad(set_to_none=True)
-            theta_loss, phi_loss, logs = self.model.losses(inputs, class_labels=class_labels)
+            theta_loss, phi_loss, logs = self.model.losses(
+                inputs,
+                class_labels=class_labels,
+                include_phi_straightness=stage.include_phi_straightness,
+            )
             theta_loss.backward(retain_graph=True)
             if grad_clip is not None:
                 torch.nn.utils.clip_grad_norm_(self.model.velocity_parameters(), grad_clip)
@@ -207,22 +325,30 @@ class Trainer:
             self.opt_phi.step()
 
             if self.ema is not None:
-                self.ema.update(self.model, self.global_step + 1)
+                self.ema.update(
+                    self.model,
+                    self.global_step + 1,
+                    theta_decay=stage.theta_ema,
+                    phi_decay=stage.phi_ema,
+                )
 
             logs = {key: float(value) for key, value in logs.items()}
             logs["theta_loss"] = float(theta_loss.detach())
             logs["phi_loss"] = float(phi_loss.detach())
+            logs["stage"] = stage.name
             progress.set_postfix(
                 {
                     "fmθ": logs.get("flow_matching_theta_loss", logs.get("theta_loss", 0.0)),
                     "strθ": logs.get("straightness_theta_loss", 0.0),
                     "strφ": logs.get("straightness_phi_loss", 0.0),
                     "klφ": logs.get("kl_phi_loss", 0.0),
+                    "stage": stage.name,
                 }
             )
 
             for key, value in logs.items():
-                self.log_scalar(key, value)
+                if isinstance(value, (int, float)):
+                    self.log_scalar(key, value)
 
             for callback in self.callbacks:
                 callback.on_step_end(self, self.global_step + 1, logs)

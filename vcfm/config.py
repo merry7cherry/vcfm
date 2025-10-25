@@ -30,7 +30,6 @@ class ModelConfig:
     ema_rate: float
     ema_type: str
     class_conditional: bool
-    total_training_steps: int
     velocity_learning_rate: float
     coupling_learning_rate: float
     velocity_weight_decay: float
@@ -43,6 +42,11 @@ class ModelConfig:
     kl_phi_weight: float
     min_log_std: float
     max_log_std: float
+    phi_warmup_steps: int
+    theta_warmup_steps: int
+    early_training_steps: int
+    late_training_steps: int
+    final_training_steps: int
 
 
 @dataclass
