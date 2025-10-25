@@ -202,29 +202,17 @@ class Trainer:
 
             self.opt_theta.zero_grad(set_to_none=True)
             self.opt_phi.zero_grad(set_to_none=True)
-            theta_loss, phi_loss, logs = self.model.losses(inputs, class_labels=class_labels)
+            total_loss, logs = self.model.losses(inputs, class_labels=class_labels)
 
-            velocity_params = list(self.model.velocity_parameters())
-
-            theta_loss.backward(retain_graph=True)
-            theta_grads = [
-                grad_param.grad.detach().clone() if grad_param.grad is not None else None
-                for grad_param in velocity_params
-            ]
-
-            phi_loss.backward()
+            total_loss.backward()
 
             if grad_clip is not None:
-                torch.nn.utils.clip_grad_norm_(self.model.coupling_parameters(), grad_clip)
-
-            for param, saved_grad in zip(velocity_params, theta_grads):
-                if saved_grad is None:
-                    param.grad = None
-                else:
-                    param.grad = saved_grad
-
-            if grad_clip is not None:
-                torch.nn.utils.clip_grad_norm_(velocity_params, grad_clip)
+                torch.nn.utils.clip_grad_norm_(
+                    list(self.model.coupling_parameters()), grad_clip
+                )
+                torch.nn.utils.clip_grad_norm_(
+                    list(self.model.velocity_parameters()), grad_clip
+                )
 
             self.opt_theta.step()
             self.opt_phi.step()
@@ -233,11 +221,12 @@ class Trainer:
                 self.ema.update(self.model, self.global_step + 1)
 
             logs = {key: float(value) for key, value in logs.items()}
-            logs["theta_loss"] = float(theta_loss.detach())
-            logs["phi_loss"] = float(phi_loss.detach())
+            logs["total_loss"] = float(total_loss.detach())
             progress.set_postfix(
                 {
-                    "fmθ": logs.get("flow_matching_theta_loss", logs.get("theta_loss", 0.0)),
+                    "fmθ": logs.get(
+                        "flow_matching_theta_loss", logs.get("total_loss", 0.0)
+                    ),
                     "str": logs.get("straightness_weighted_loss", 0.0),
                     "klφ": logs.get("kl_phi_loss", 0.0),
                 }

@@ -213,7 +213,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
     # ------------------------------------------------------------------
     def losses(
         self, x_1: torch.Tensor, *, class_labels: Optional[torch.Tensor] = None
-    ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         device = x_1.device
         batch = x_1.shape[0]
 
@@ -299,34 +299,23 @@ class VariationallyCoupledFlowMatching(nn.Module):
         kl_phi_loss = -0.5 * (1 + logvar_z - mu_z.pow(2) - logvar_z.exp())
         kl_phi_loss = kl_phi_loss.sum(dim=1).mean()
 
-        theta_components = {"flow_matching_theta_loss": fm_loss}
-        phi_components = {"kl_phi_loss": kl_phi_loss}
-
+        flow_matching_weighted = self.flow_matching_theta_weight * fm_loss
         straightness_weighted = self.straightness_weight * straightness_loss
+        phi_kl_weighted = self.kl_phi_weight * kl_phi_loss
 
-        theta_loss = (
-            self.flow_matching_theta_weight * theta_components["flow_matching_theta_loss"]
-            + straightness_weighted
-        )
+        total_loss = flow_matching_weighted + straightness_weighted + phi_kl_weighted
 
-        phi_kl_weighted = self.kl_phi_weight * phi_components["kl_phi_loss"]
-        phi_total_loss = phi_kl_weighted + straightness_weighted
-        phi_loss = phi_total_loss
-
-        component_logs = {
-            **{name: value.detach() for name, value in theta_components.items()},
-            **{name: value.detach() for name, value in phi_components.items()},
+        log_dict = {
+            "flow_matching_theta_loss": fm_loss.detach(),
+            "flow_matching_weighted_loss": flow_matching_weighted.detach(),
             "straightness_loss": straightness_loss.detach(),
             "straightness_weighted_loss": straightness_weighted.detach(),
-            "phi_total_loss": phi_total_loss.detach(),
-        }
-        log_dict = {
-            **component_logs,
-            "theta_loss": theta_loss.detach(),
-            "phi_loss": phi_loss.detach(),
+            "kl_phi_loss": kl_phi_loss.detach(),
+            "kl_phi_weighted_loss": phi_kl_weighted.detach(),
+            "total_loss": total_loss.detach(),
         }
 
-        return theta_loss, phi_loss, log_dict
+        return total_loss, log_dict
 
     # ------------------------------------------------------------------
     # Sampling
