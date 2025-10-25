@@ -32,17 +32,17 @@ class ModelConfig:
     class_conditional: bool
     total_training_steps: int
     velocity_learning_rate: float
-    coupling_learning_rate: float
+    phi_learning_rate: float
     velocity_weight_decay: float
-    coupling_weight_decay: float
+    phi_weight_decay: float
     sigma_min: float
     sigma_max: float
     flow_matching_theta_weight: float
-    straightness_theta_weight: float
-    straightness_phi_weight: float
+    straightness_weight: float
     kl_phi_weight: float
-    min_log_std: float
-    max_log_std: float
+    latent_dim: int
+    phi_hidden_channels: int
+    phi_num_layers: int
 
 
 @dataclass

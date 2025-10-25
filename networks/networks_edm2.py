@@ -203,6 +203,7 @@ class UNet(torch.nn.Module):
                  label_balance=0.5,  # Balance between noise embedding (0) and class embedding (1).
                  concat_balance=0.5,  # Balance between skip connections (0) and main path (1).
                  dropout_res=None,  # Feature resolution (<= drop_res) where dropout applied
+                 latent_dim=0,
                  **block_kwargs,  # Arguments for Block.
                  ):
         super().__init__()
@@ -217,6 +218,8 @@ class UNet(torch.nn.Module):
         self.emb_fourier = MPFourier(cnoise)
         self.emb_noise = MPConv(cnoise, cemb, kernel=[])
         self.emb_label = MPConv(label_dim, cemb, kernel=[]) if label_dim != 0 else None
+        self.latent_dim = latent_dim
+        self.emb_latent = MPConv(latent_dim, cemb, kernel=[]) if latent_dim != 0 else None
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
@@ -261,11 +264,15 @@ class UNet(torch.nn.Module):
         self.out_conv = MPConv(cout, img_channels, kernel=[3, 3])
 
 
-    def forward(self, x, noise_labels, class_labels, **kwargs):
+    def forward(self, x, noise_labels, class_labels, latent_z=None, **kwargs):
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(noise_labels))
         if self.emb_label is not None:
             emb = mp_sum(emb, self.emb_label(class_labels * np.sqrt(class_labels.shape[1])), t=self.label_balance)
+        if self.emb_latent is not None:
+            if latent_z is None:
+                raise ValueError("Latent conditioning is enabled but latent_z was not provided.")
+            emb = mp_sum(emb, self.emb_latent(latent_z), t=0.5)
         emb = mp_silu(emb)
 
         # Encoder.
@@ -304,7 +311,12 @@ class Precond(torch.nn.Module):
         self.label_dim = label_dim
         self.use_fp16 = use_fp16
         self.sigma_data = sigma_data
-        self.unet = UNet(img_resolution=img_resolution, img_channels=img_channels, label_dim=label_dim, **unet_kwargs)
+        self.unet = UNet(
+            img_resolution=img_resolution,
+            img_channels=img_channels,
+            label_dim=label_dim,
+            **unet_kwargs,
+        )
 
         # If there is only a single training/tuning stage, it could be considered as an option.
 
@@ -327,7 +339,8 @@ class Precond(torch.nn.Module):
 
         # Run the model.
         x_in = (c_in * x).to(dtype)
-        F_x = self.unet(x_in, c_noise, class_labels, **unet_kwargs)
+        latent_z = unet_kwargs.pop('latent_z', None)
+        F_x = self.unet(x_in, c_noise, class_labels, latent_z=latent_z, **unet_kwargs)
         D_x = c_skip * x + c_out * F_x.to(torch.float32)
 
         # Estimate uncertainty if requested.
@@ -360,6 +373,7 @@ class EDM2(torch.nn.Module):
                  label_balance=0.5,  # Balance between noise embedding (0) and class embedding (1).
                  concat_balance=0.5,  # Balance between skip connections (0) and main path (1).
                  dropout_res=None,  # Feature resolution (<= drop_res) where dropout applied
+                 latent_dim=0,
                  **block_kwargs,  # Arguments for Block.
                  ):
         super().__init__()
@@ -374,6 +388,8 @@ class EDM2(torch.nn.Module):
         self.emb_fourier = MPFourier(cnoise)
         self.emb_noise = MPConv(cnoise, cemb, kernel=[])
         self.emb_label = MPConv(label_dim, cemb, kernel=[]) if label_dim != 0 else None
+        self.latent_dim = latent_dim
+        self.emb_latent = MPConv(latent_dim, cemb, kernel=[]) if latent_dim != 0 else None
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
@@ -417,11 +433,15 @@ class EDM2(torch.nn.Module):
                                                             attention=(res in attn_resolutions), **dec_block_kwargs)
         self.out_conv = MPConv(cout, out_channels, kernel=[3, 3])
 
-    def forward(self, x, noise_labels, class_labels, **kwargs):
+    def forward(self, x, noise_labels, class_labels, latent_z=None, **kwargs):
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(noise_labels))
         if self.emb_label is not None:
             emb = mp_sum(emb, self.emb_label(class_labels * np.sqrt(class_labels.shape[1])), t=self.label_balance)
+        if self.emb_latent is not None:
+            if latent_z is None:
+                raise ValueError("Latent conditioning is enabled but latent_z was not provided.")
+            emb = mp_sum(emb, self.emb_latent(latent_z), t=0.5)
         emb = mp_silu(emb)
 
         # Encoder.

@@ -48,70 +48,106 @@ def _prepare_class_labels(
     return class_labels.to(device=device, dtype=dtype)
 
 
-class GaussianCoupling(nn.Module):
-    """Gaussian variational coupling q_\phi(x_0 | x_1)."""
+class LatentEncoder(nn.Module):
+    """Lightweight convolutional encoder that produces a latent posterior."""
 
     def __init__(
         self,
-        net: nn.Module,
+        *,
+        in_channels: int,
+        latent_dim: int,
+        hidden_channels: int,
+        num_layers: int,
         label_dim: int = 0,
-        min_log_std: float = -7.0,
-        max_log_std: float = 5.0,
     ) -> None:
         super().__init__()
-        self.net = net
+        if latent_dim <= 0:
+            raise ValueError("latent_dim must be positive")
+        if num_layers <= 0:
+            raise ValueError("num_layers must be positive")
+        input_channels = in_channels * 3 + 1
+        layers = []
+        channels = input_channels
+        for layer_idx in range(num_layers):
+            layers.append(
+                nn.Conv2d(
+                    channels,
+                    hidden_channels,
+                    kernel_size=3,
+                    padding=1,
+                )
+            )
+            layers.append(
+                nn.GroupNorm(
+                    num_groups=min(32, hidden_channels), num_channels=hidden_channels
+                )
+            )
+            layers.append(nn.SiLU())
+            channels = hidden_channels
+        self.encoder = nn.Sequential(*layers)
+        self.pool = nn.AdaptiveAvgPool2d(1)
         self.label_dim = label_dim
-        self.min_log_std = min_log_std
-        self.max_log_std = max_log_std
+        self.latent_dim = latent_dim
+        projection_dim = hidden_channels
+        if label_dim > 0:
+            self.label_embed = nn.Linear(label_dim, projection_dim)
+        else:
+            self.label_embed = None
+        self.fc_mu = nn.Linear(projection_dim, latent_dim)
+        self.fc_logvar = nn.Linear(projection_dim, latent_dim)
 
     def forward(
-        self, x_1: torch.Tensor, class_labels: Optional[torch.Tensor] = None
+        self,
+        x_0: torch.Tensor,
+        x_1: torch.Tensor,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+        class_labels: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        batch = x_1.shape[0]
-        device = x_1.device
-        dtype = x_1.dtype
-        noise_labels = torch.zeros(batch, device=device, dtype=dtype)
-        class_labels = _prepare_class_labels(
-            class_labels,
-            batch_size=batch,
-            label_dim=self.label_dim,
-            device=device,
-            dtype=dtype,
-        )
-        outputs = self.net(x_1, noise_labels, class_labels)
-        mu, log_sigma = torch.chunk(outputs, 2, dim=1)
-        log_sigma = torch.clamp(log_sigma, self.min_log_std, self.max_log_std)
-        return mu, log_sigma
+        if t.ndim < x_0.ndim:
+            t = t.view(t.shape[0], 1, *([1] * (x_0.ndim - 2)))
+        if t.shape[2:] != x_0.shape[2:]:
+            t = t.expand(-1, -1, *x_0.shape[2:])
+        inputs = torch.cat([x_0, x_1, x_t, t], dim=1)
+        hidden = self.encoder(inputs)
+        hidden = self.pool(hidden).flatten(1)
+        if self.label_embed is not None:
+            if class_labels is None:
+                raise ValueError(
+                    "Class labels must be provided for conditional latent encoding."
+                )
+            hidden = hidden + self.label_embed(class_labels)
+        mu = self.fc_mu(hidden)
+        logvar = self.fc_logvar(hidden)
+        return mu, logvar
 
 
 class VariationallyCoupledFlowMatching(nn.Module):
-    """
-    Variationally-Coupled Flow Matching (VC-FM).
-    """
+    """Variationally-Coupled Flow Matching with latent-conditioning."""
 
     def __init__(
         self,
         velocity_net: nn.Module,
-        coupling_net: GaussianCoupling,
+        latent_encoder: LatentEncoder,
         *,
         sigma_min: float,
         sigma_max: float,
         flow_matching_theta_weight: float,
-        straightness_theta_weight: float,
-        straightness_phi_weight: float,
+        straightness_weight: float,
         kl_phi_weight: float,
         label_dim: int,
+        latent_dim: int,
     ) -> None:
         super().__init__()
         self.velocity_net = velocity_net
-        self.coupling_net = coupling_net
+        self.latent_encoder = latent_encoder
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
         self.flow_matching_theta_weight = flow_matching_theta_weight
-        self.straightness_theta_weight = straightness_theta_weight
-        self.straightness_phi_weight = straightness_phi_weight
+        self.straightness_weight = straightness_weight
         self.kl_phi_weight = kl_phi_weight
         self.label_dim = label_dim
+        self.latent_dim = latent_dim
 
     # ------------------------------------------------------------------
     # Helpers
@@ -120,7 +156,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
         return self.velocity_net.parameters()
 
     def coupling_parameters(self):
-        return self.coupling_net.parameters()
+        return self.latent_encoder.parameters()
 
     def _flatten_time(self, t: torch.Tensor) -> torch.Tensor:
         if t.ndim == 1:
@@ -143,6 +179,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
         x: torch.Tensor,
         t: torch.Tensor,
         class_labels: Optional[torch.Tensor],
+        z: torch.Tensor,
         *,
         detach_params: bool,
     ) -> torch.Tensor:
@@ -159,13 +196,17 @@ class VariationallyCoupledFlowMatching(nn.Module):
         else:
             params = OrderedDict(self.velocity_net.named_parameters())
             buffers = OrderedDict(self.velocity_net.named_buffers())
-        args = (x, noise_labels, class_labels)
+        args = (x, noise_labels, class_labels, z)
         return functional_call(self.velocity_net, (params, buffers), args)
 
     def velocity(
-        self, x: torch.Tensor, t: torch.Tensor, class_labels: Optional[torch.Tensor]
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        class_labels: Optional[torch.Tensor],
+        z: torch.Tensor,
     ) -> torch.Tensor:
-        return self._velocity_forward(x, t, class_labels, detach_params=False)
+        return self._velocity_forward(x, t, class_labels, z, detach_params=False)
 
     # ------------------------------------------------------------------
     # Losses
@@ -184,10 +225,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
             dtype=x_1.dtype,
         )
 
-        eps = torch.randn_like(x_1)
-        mu, log_sigma = self.coupling_net(x_1, class_labels)
-        sigma = torch.exp(log_sigma)
-        x_0 = mu + sigma * eps
+        x_0 = torch.randn_like(x_1)
         x_0 = x_0.requires_grad_(True)
 
         t = _time_broadcast(x_1.shape, device, x_1.dtype)
@@ -196,10 +234,20 @@ class VariationallyCoupledFlowMatching(nn.Module):
         x_t = x_t.requires_grad_(True)
         u = (x_1 - x_0).detach()
 
+        mu_z, logvar_z = self.latent_encoder(
+            x_0.detach(), x_1.detach(), x_t.detach(), t.detach(), class_labels
+        )
+        std_z = torch.exp(0.5 * logvar_z)
+        eps_z = torch.randn_like(mu_z)
+        z = mu_z + std_z * eps_z
+        z = z.requires_grad_(True)
+
         labels_detached = class_labels.detach() if class_labels is not None else None
 
         def _total_time_derivative(
-            fn, inputs: Tuple[torch.Tensor, torch.Tensor], tangents: Tuple[torch.Tensor, torch.Tensor]
+            fn,
+            inputs: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+            tangents: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
         ) -> torch.Tensor:
             _, derivative = autograd_jvp(
                 fn,
@@ -210,73 +258,67 @@ class VariationallyCoupledFlowMatching(nn.Module):
             )
             return derivative
 
-        def _velocity_fn(detach_params: bool):
-            def wrapped(x_in: torch.Tensor, t_in: torch.Tensor) -> torch.Tensor:
+        def _velocity_theta(detach_params: bool):
+            def wrapped(
+                x_in: torch.Tensor, t_in: torch.Tensor, z_in: torch.Tensor
+            ) -> torch.Tensor:
                 return self._velocity_forward(
                     x_in,
                     t_in,
                     labels_detached,
+                    z_in,
                     detach_params=detach_params,
                 )
 
             return wrapped
 
         # Theta (velocity network) objectives -------------------------------------------------
-        x_t_theta = x_t.detach().clone().requires_grad_(True)
-        t_theta = t.detach().clone().requires_grad_(True)
-        tangent_theta = ((x_1 - x_0).detach(), torch.ones_like(t_theta))
+        x_t_theta = x_t.detach().clone()
+        t_theta = t.detach().clone()
+        z_theta = z.detach()
 
-        fm_residual = self.velocity(x_t_theta, t_theta, labels_detached) - u
+        fm_residual = self.velocity(
+            x_t_theta, t_theta, labels_detached, z_theta
+        ) - u
         fm_loss = fm_residual.reshape(batch, -1).pow(2).mean(dim=1).mean()
 
-        total_derivative_theta = _total_time_derivative(
-            _velocity_fn(detach_params=False),
-            (x_t_theta, t_theta),
-            tangent_theta,
+        tangent = (
+            (x_1 - x_0).detach(),
+            torch.ones_like(t),
+            torch.zeros_like(z),
         )
-        straightness_loss_theta = (
-            total_derivative_theta.reshape(batch, -1).pow(2).sum(dim=1).mean()
+        straightness = _total_time_derivative(
+            _velocity_theta(detach_params=False),
+            (x_t, t, z),
+            tangent,
+        )
+        straightness_loss = (
+            straightness.reshape(batch, -1).pow(2).sum(dim=1).mean()
         )
 
-        theta_components = {
-            "flow_matching_theta_loss": fm_loss,
-            "straightness_theta_loss": straightness_loss_theta,
-        }
+        kl_phi_loss = -0.5 * (1 + logvar_z - mu_z.pow(2) - logvar_z.exp())
+        kl_phi_loss = kl_phi_loss.sum(dim=1).mean()
+
+        theta_components = {"flow_matching_theta_loss": fm_loss}
+        phi_components = {"kl_phi_loss": kl_phi_loss}
+
+        straightness_weighted = self.straightness_weight * straightness_loss
+
         theta_loss = (
             self.flow_matching_theta_weight * theta_components["flow_matching_theta_loss"]
-            + self.straightness_theta_weight * theta_components["straightness_theta_loss"]
+            + straightness_weighted
         )
 
-        # Phi (coupling network) objectives ---------------------------------------------------
-        tangent_phi = ((x_1 - x_0).detach(), torch.ones_like(t))
-        total_derivative_phi = _total_time_derivative(
-            _velocity_fn(detach_params=True),
-            (x_t, t),
-            tangent_phi,
-        )
-        straightness_loss_phi = (
-            total_derivative_phi.reshape(batch, -1).pow(2).sum(dim=1).mean()
-        )
-
-        kl_phi_loss = 0.5 * (
-            (mu.pow(2) + sigma.pow(2) - 1.0 - 2.0 * log_sigma)
-            .reshape(batch, -1)
-            .sum(dim=1)
-            .mean()
-        )
-
-        phi_components = {
-            "straightness_phi_loss": straightness_loss_phi,
-            "kl_phi_loss": kl_phi_loss,
-        }
-        phi_loss = (
-            self.straightness_phi_weight * phi_components["straightness_phi_loss"]
-            + self.kl_phi_weight * phi_components["kl_phi_loss"]
-        )
+        phi_kl_weighted = self.kl_phi_weight * phi_components["kl_phi_loss"]
+        phi_total_loss = phi_kl_weighted + straightness_weighted
+        phi_loss = phi_total_loss
 
         component_logs = {
             **{name: value.detach() for name, value in theta_components.items()},
             **{name: value.detach() for name, value in phi_components.items()},
+            "straightness_loss": straightness_loss.detach(),
+            "straightness_weighted_loss": straightness_weighted.detach(),
+            "phi_total_loss": phi_total_loss.detach(),
         }
         log_dict = {
             **component_logs,
@@ -297,6 +339,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
         device: torch.device,
         *,
         class_labels: Optional[torch.Tensor] = None,
+        z: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         dtype = next(self.velocity_net.parameters()).dtype
         batch = sample_shape[0]
@@ -308,6 +351,20 @@ class VariationallyCoupledFlowMatching(nn.Module):
             dtype=dtype,
         )
         x = torch.randn(sample_shape, device=device, dtype=dtype)
+        if z is None:
+            z = torch.randn(batch, self.latent_dim, device=device, dtype=dtype)
+        else:
+            if z.ndim != 2 or z.shape[-1] != self.latent_dim:
+                raise ValueError(
+                    "Provided latent codes must have shape (batch, latent_dim)."
+                )
+            if z.shape[0] not in {1, batch}:
+                raise ValueError(
+                    "Number of provided latents must be 1 or match the batch size."
+                )
+            if z.shape[0] == 1 and batch > 1:
+                z = z.expand(batch, -1)
+            z = z.to(device=device, dtype=dtype)
         if class_labels is not None and self.label_dim > 0:
             class_labels = class_labels.to(device=device, dtype=dtype)
         dt = 1.0 / max(n_iters, 1)
@@ -318,6 +375,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
                 device=device,
                 dtype=dtype,
             )
-            v = self.velocity(x, t_value, class_labels)
+            v = self.velocity(x, t_value, class_labels, z)
             x = x + dt * v
         return x
+

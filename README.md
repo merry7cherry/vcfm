@@ -1,11 +1,11 @@
 # VC-FM: Variationally-Coupled Flow Matching
 
-This repository contains a minimal PyTorch implementation of **Variationally-Coupled Flow Matching (VC-FM)**. The method trains a flow-matching velocity field together with a variational coupling network that learns optimal transport pairings. EDM and EDM2 U-Nets are available as interchangeable backbones.
+This repository contains a minimal PyTorch implementation of **Variationally-Coupled Flow Matching (VC-FM)**. The method trains a flow-matching velocity field together with a variational latent encoder that supplies conditioning codes. EDM and EDM2 U-Nets are available as interchangeable backbones.
 
 ## What's inside
 
-* Plain PyTorch training loop with two optimizers (velocity and coupling) and optional EMA.
-* Linear-interpolant flow matching loss combined with the straightness regularizer for the coupling network.
+* Plain PyTorch training loop with two optimizers (velocity and latent encoder) and optional EMA.
+* Linear-interpolant flow matching loss combined with a shared straightness regularizer for the velocity and latent encoder.
 * Dataset factory covering CIFAR-10, MNIST, Fashion-MNIST, FFHQ (image folder), and ImageNet (image folder) with conditional labels when requested.
 * Lightweight callback system for periodic sample generation and FID evaluation.
 * Inference helpers for loading checkpoints and generating samples without Lightning or WandB.
@@ -92,7 +92,7 @@ vcfm/
   data.py            # dataset/dataloader factory
   trainer.py         # training loop with two optimizers and EMA
   callbacks.py       # minimal callback system (sampling, FID)
-  model_factory.py   # EDM/EDM2 builders for velocity & coupling nets
+  model_factory.py   # EDM/EDM2 builders for velocity & latent encoder
   utils.py           # seed, channel helpers, resumable dataloader
   inference.py       # checkpoint loading and sampling helpers
 models/
