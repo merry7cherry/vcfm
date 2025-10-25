@@ -273,9 +273,9 @@ class VariationallyCoupledFlowMatching(nn.Module):
             return wrapped
 
         # Theta (velocity network) objectives -------------------------------------------------
-        x_t_theta = x_t.detach().clone()
-        t_theta = t.detach().clone()
-        z_theta = z.detach()
+        x_t_theta = x_t
+        t_theta = t
+        z_theta = z
 
         fm_residual = self.velocity(
             x_t_theta, t_theta, labels_detached, z_theta
