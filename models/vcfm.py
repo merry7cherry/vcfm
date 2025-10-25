@@ -58,7 +58,6 @@ class LatentEncoder(nn.Module):
         latent_dim: int,
         hidden_channels: int,
         num_layers: int,
-        label_dim: int = 0,
     ) -> None:
         super().__init__()
         if latent_dim <= 0:
@@ -86,13 +85,8 @@ class LatentEncoder(nn.Module):
             channels = hidden_channels
         self.encoder = nn.Sequential(*layers)
         self.pool = nn.AdaptiveAvgPool2d(1)
-        self.label_dim = label_dim
         self.latent_dim = latent_dim
         projection_dim = hidden_channels
-        if label_dim > 0:
-            self.label_embed = nn.Linear(label_dim, projection_dim)
-        else:
-            self.label_embed = None
         self.fc_mu = nn.Linear(projection_dim, latent_dim)
         self.fc_logvar = nn.Linear(projection_dim, latent_dim)
 
@@ -102,7 +96,6 @@ class LatentEncoder(nn.Module):
         x_1: torch.Tensor,
         x_t: torch.Tensor,
         t: torch.Tensor,
-        class_labels: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if t.ndim < x_0.ndim:
             t = t.view(t.shape[0], 1, *([1] * (x_0.ndim - 2)))
@@ -111,12 +104,6 @@ class LatentEncoder(nn.Module):
         inputs = torch.cat([x_0, x_1, x_t, t], dim=1)
         hidden = self.encoder(inputs)
         hidden = self.pool(hidden).flatten(1)
-        if self.label_embed is not None:
-            if class_labels is None:
-                raise ValueError(
-                    "Class labels must be provided for conditional latent encoding."
-                )
-            hidden = hidden + self.label_embed(class_labels)
         mu = self.fc_mu(hidden)
         logvar = self.fc_logvar(hidden)
         return mu, logvar
@@ -235,7 +222,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
         u = (x_1 - x_0).detach()
 
         mu_z, logvar_z = self.latent_encoder(
-            x_0.detach(), x_1.detach(), x_t.detach(), t.detach(), class_labels
+            x_0.detach(), x_1.detach(), x_t.detach(), t.detach()
         )
         std_z = torch.exp(0.5 * logvar_z)
         eps_z = torch.randn_like(mu_z)

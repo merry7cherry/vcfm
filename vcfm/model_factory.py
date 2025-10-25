@@ -75,13 +75,11 @@ def _build_velocity_net(cfg: Config, out_channels: int) -> torch.nn.Module:
 
 def _build_latent_encoder(cfg: Config) -> LatentEncoder:
     dataset = cfg.dataset
-    label_dim = dataset.label_dim if cfg.model.class_conditional else 0
     return LatentEncoder(
         in_channels=dataset.in_channels,
         latent_dim=cfg.model.latent_dim,
         hidden_channels=cfg.model.phi_hidden_channels,
         num_layers=cfg.model.phi_num_layers,
-        label_dim=label_dim,
     )
 
 
