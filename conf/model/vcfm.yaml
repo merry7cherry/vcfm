@@ -12,7 +12,7 @@ phi_weight_decay: 0.0
 
 sigma_min: 0.002
 sigma_max: 80.0
-flow_matching_theta_weight: 1000.0
+flow_matching_theta_weight: 100.0
 straightness_weight: 1.0
 kl_phi_weight: 100.0
 latent_dim: 256
