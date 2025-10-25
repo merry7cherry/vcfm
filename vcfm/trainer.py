@@ -97,9 +97,9 @@ class Trainer:
         )
         self.opt_phi = AdamW(
             self.model.coupling_parameters(),
-            lr=cfg.model.coupling_learning_rate,
+            lr=cfg.model.phi_learning_rate,
             betas=(0.9, 0.99),
-            weight_decay=cfg.model.coupling_weight_decay,
+            weight_decay=cfg.model.phi_weight_decay,
         )
 
     # ------------------------------------------------------------------
@@ -160,9 +160,16 @@ class Trainer:
         *,
         use_ema: bool = True,
         class_labels: Optional[torch.Tensor] = None,
+        z: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         model = self.ema.model if (use_ema and self.ema is not None) else self.model
-        return model.sample(sample_shape, n_iters, self.device, class_labels=class_labels)
+        return model.sample(
+            sample_shape,
+            n_iters,
+            self.device,
+            class_labels=class_labels,
+            z=z,
+        )
 
     def fit(self) -> None:
         train_loader = self.data.train
@@ -194,13 +201,13 @@ class Trainer:
             class_labels = self._format_labels(raw_labels, inputs)
 
             self.opt_theta.zero_grad(set_to_none=True)
+            self.opt_phi.zero_grad(set_to_none=True)
             theta_loss, phi_loss, logs = self.model.losses(inputs, class_labels=class_labels)
             theta_loss.backward(retain_graph=True)
             if grad_clip is not None:
                 torch.nn.utils.clip_grad_norm_(self.model.velocity_parameters(), grad_clip)
             self.opt_theta.step()
 
-            self.opt_phi.zero_grad(set_to_none=True)
             phi_loss.backward()
             if grad_clip is not None:
                 torch.nn.utils.clip_grad_norm_(self.model.coupling_parameters(), grad_clip)
@@ -215,8 +222,7 @@ class Trainer:
             progress.set_postfix(
                 {
                     "fmθ": logs.get("flow_matching_theta_loss", logs.get("theta_loss", 0.0)),
-                    "strθ": logs.get("straightness_theta_loss", 0.0),
-                    "strφ": logs.get("straightness_phi_loss", 0.0),
+                    "str": logs.get("straightness_weighted_loss", 0.0),
                     "klφ": logs.get("kl_phi_loss", 0.0),
                 }
             )

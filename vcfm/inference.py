@@ -52,9 +52,16 @@ def generate(
     n_iters: int,
     device: Optional[torch.device] = None,
     class_labels: Optional[torch.Tensor] = None,
+    z: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     device = device or next(model.parameters()).device
-    return model.sample(sample_shape, n_iters, device, class_labels=class_labels)
+    return model.sample(
+        sample_shape,
+        n_iters,
+        device,
+        class_labels=class_labels,
+        z=z,
+    )
 
 
 __all__ = ["load_checkpoint", "generate"]
