@@ -269,7 +269,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
         )
         straightness = _total_time_derivative(
             _velocity_theta(detach_params=False),
-            (x_t, t, z.detach()),
+            (x_t, t, z),
             tangent,
         )
         straightness_loss = (
