@@ -302,7 +302,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
         tangent = (
             (x_1 - x_0).detach(),
             torch.ones_like(t),
-            dzdt,
+            dzdt.detach(),
         )
         straightness = _total_time_derivative(
             _velocity_theta(detach_params=False),
