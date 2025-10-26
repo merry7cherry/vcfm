@@ -305,7 +305,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
             dzdt.detach(),
         )
         straightness = _total_time_derivative(
-            _velocity_theta(detach_params=False),
+            _velocity_theta(detach_params=True),
             (x_t, t, z),
             tangent,
         )
