@@ -230,8 +230,8 @@ class VariationallyCoupledFlowMatching(nn.Module):
 
         def _total_time_derivative(
             fn,
-            inputs: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
-            tangents: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+            inputs: Tuple[torch.Tensor, ...],
+            tangents: Tuple[torch.Tensor, ...],
         ) -> torch.Tensor:
             _, derivative = autograd_jvp(
                 fn,
@@ -256,16 +256,53 @@ class VariationallyCoupledFlowMatching(nn.Module):
 
             return wrapped
 
+        def _latent_phi(detach_params: bool):
+            def wrapped(
+                x0_in: torch.Tensor,
+                x1_in: torch.Tensor,
+                xt_in: torch.Tensor,
+                t_in: torch.Tensor,
+            ) -> torch.Tensor:
+                if detach_params:
+                    params = OrderedDict(
+                        (name, param.detach().clone())
+                        for name, param in self.latent_encoder.named_parameters()
+                    )
+                    buffers = OrderedDict(
+                        (name, buf.detach().clone())
+                        for name, buf in self.latent_encoder.named_buffers()
+                    )
+                else:
+                    params = OrderedDict(self.latent_encoder.named_parameters())
+                    buffers = OrderedDict(self.latent_encoder.named_buffers())
+                args = (x0_in, x1_in, xt_in, t_in)
+                mu, logvar = functional_call(self.latent_encoder, (params, buffers), args)
+                std = torch.exp(0.5 * logvar)
+                return mu + std * eps_z
+
+            return wrapped
+
         # Theta (velocity network) objectives -------------------------------------------------
         fm_residual = self.velocity(
             x_t, t, labels_detached, z
         ) - u
         fm_loss = fm_residual.reshape(batch, -1).pow(2).mean(dim=1).mean()
 
+        dzdt = _total_time_derivative(
+            _latent_phi(detach_params=True),
+            (x_0, x_1, x_t, t),
+            (
+                torch.zeros_like(x_0),
+                torch.zeros_like(x_1),
+                (x_1 - x_0).detach(),
+                torch.ones_like(t),
+            ),
+        )
+
         tangent = (
             (x_1 - x_0).detach(),
             torch.ones_like(t),
-            torch.zeros_like(z),
+            dzdt,
         )
         straightness = _total_time_derivative(
             _velocity_theta(detach_params=False),
