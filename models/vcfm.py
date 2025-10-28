@@ -48,6 +48,36 @@ def _prepare_class_labels(
     return class_labels.to(device=device, dtype=dtype)
 
 
+class SinusoidalEmbedding(nn.Module):
+    """Standard sinusoidal embedding used for time representations."""
+
+    def __init__(self, dim: int, max_period: float = 10000.0) -> None:
+        super().__init__()
+        if dim <= 0:
+            raise ValueError("dim must be positive for SinusoidalEmbedding")
+        self.dim = dim
+        self.max_period = max_period
+
+    def forward(self, t: torch.Tensor) -> torch.Tensor:
+        if t.ndim > 1:
+            t = t.reshape(t.shape[0], -1)[:, 0]
+        if t.ndim == 0:
+            t = t.unsqueeze(0)
+        half_dim = self.dim // 2
+        if half_dim == 0:
+            return t[:, None]
+        device = t.device
+        dtype = t.dtype
+        exponent = torch.arange(half_dim, device=device, dtype=dtype)
+        exponent = -math.log(self.max_period) * exponent / max(half_dim - 1, 1)
+        freqs = torch.exp(exponent)
+        args = t[:, None] * freqs[None]
+        emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
+        if self.dim % 2 == 1:
+            emb = F.pad(emb, (0, 1))
+        return emb
+
+
 class LatentEncoder(nn.Module):
     """Lightweight convolutional encoder that produces a latent posterior."""
 
@@ -58,16 +88,27 @@ class LatentEncoder(nn.Module):
         latent_dim: int,
         hidden_channels: int,
         num_layers: int,
+        time_embedding_dim: int,
+        time_embedding_max_period: float,
+        mlp_hidden_dim: int,
+        mlp_output_dim: int,
     ) -> None:
         super().__init__()
         if latent_dim <= 0:
             raise ValueError("latent_dim must be positive")
         if num_layers <= 0:
             raise ValueError("num_layers must be positive")
-        input_channels = in_channels * 3 + 1
+        if time_embedding_dim <= 0:
+            raise ValueError("time_embedding_dim must be positive")
+        if mlp_hidden_dim <= 0 or mlp_output_dim <= 0:
+            raise ValueError("MLP dimensions must be positive")
+        self.time_embedding = SinusoidalEmbedding(
+            time_embedding_dim, max_period=time_embedding_max_period
+        )
+        input_channels = in_channels * 3 + time_embedding_dim
         layers = []
         channels = input_channels
-        for layer_idx in range(num_layers):
+        for _ in range(num_layers):
             layers.append(
                 nn.Conv2d(
                     channels,
@@ -87,8 +128,14 @@ class LatentEncoder(nn.Module):
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.latent_dim = latent_dim
         projection_dim = hidden_channels
-        self.fc_mu = nn.Linear(projection_dim, latent_dim)
-        self.fc_logvar = nn.Linear(projection_dim, latent_dim)
+        self.mlp = nn.Sequential(
+            nn.Linear(projection_dim, mlp_hidden_dim),
+            nn.SiLU(),
+            nn.Linear(mlp_hidden_dim, mlp_output_dim),
+            nn.SiLU(),
+        )
+        self.fc_mu = nn.Linear(mlp_output_dim, latent_dim)
+        self.fc_logvar = nn.Linear(mlp_output_dim, latent_dim)
 
     def forward(
         self,
@@ -97,13 +144,15 @@ class LatentEncoder(nn.Module):
         x_t: torch.Tensor,
         t: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        if t.ndim < x_0.ndim:
-            t = t.view(t.shape[0], 1, *([1] * (x_0.ndim - 2)))
-        if t.shape[2:] != x_0.shape[2:]:
-            t = t.expand(-1, -1, *x_0.shape[2:])
-        inputs = torch.cat([x_0, x_1, x_t, t], dim=1)
+        batch, _, *spatial = x_0.shape
+        t = t.to(device=x_0.device, dtype=x_0.dtype)
+        time_emb = self.time_embedding(t).to(dtype=x_0.dtype)
+        time_emb = time_emb.view(batch, -1, *([1] * len(spatial)))
+        time_emb = time_emb.expand(-1, -1, *spatial)
+        inputs = torch.cat([x_0, x_1, x_t, time_emb], dim=1)
         hidden = self.encoder(inputs)
         hidden = self.pool(hidden).flatten(1)
+        hidden = self.mlp(hidden)
         mu = self.fc_mu(hidden)
         logvar = self.fc_logvar(hidden)
         return mu, logvar

@@ -43,6 +43,10 @@ class ModelConfig:
     latent_dim: int
     phi_hidden_channels: int
     phi_num_layers: int
+    phi_time_embedding_dim: int = 512
+    phi_time_embedding_max_period: float = 10000.0
+    phi_mlp_hidden_dim: int = 512
+    phi_mlp_output_dim: int = 512
 
 
 @dataclass
