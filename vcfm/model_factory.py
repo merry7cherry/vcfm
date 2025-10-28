@@ -80,6 +80,10 @@ def _build_latent_encoder(cfg: Config) -> LatentEncoder:
         latent_dim=cfg.model.latent_dim,
         hidden_channels=cfg.model.phi_hidden_channels,
         num_layers=cfg.model.phi_num_layers,
+        time_embedding_dim=cfg.model.phi_time_embedding_dim,
+        time_embedding_max_period=cfg.model.phi_time_embedding_max_period,
+        mlp_hidden_dim=cfg.model.phi_mlp_hidden_dim,
+        mlp_output_dim=cfg.model.phi_mlp_output_dim,
     )
 
 

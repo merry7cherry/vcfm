@@ -1,6 +1,6 @@
 name: 'vcfm'
 use_ema: True
-ema_rate: 0.99
+ema_rate: 0.9999
 ema_type: 'traditional'
 class_conditional: True
 
@@ -18,3 +18,7 @@ kl_phi_weight: 100.0
 latent_dim: 256
 phi_hidden_channels: 128
 phi_num_layers: 2
+phi_time_embedding_dim: 128
+phi_time_embedding_max_period: 10000.0
+phi_mlp_hidden_dim: 256
+phi_mlp_output_dim: 256
