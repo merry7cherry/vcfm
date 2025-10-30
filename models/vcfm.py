@@ -5,8 +5,7 @@ from typing import Dict, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.autograd.functional import jvp as autograd_jvp
-from torch.func import functional_call
+from torch.func import functional_call, jvp as func_jvp
 
 
 def _time_broadcast(
@@ -169,7 +168,6 @@ class VariationallyCoupledFlowMatching(nn.Module):
         sigma_min: float,
         sigma_max: float,
         flow_matching_theta_weight: float,
-        straightness_weight: float,
         kl_phi_weight: float,
         label_dim: int,
         latent_dim: int,
@@ -180,7 +178,6 @@ class VariationallyCoupledFlowMatching(nn.Module):
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
         self.flow_matching_theta_weight = flow_matching_theta_weight
-        self.straightness_weight = straightness_weight
         self.kl_phi_weight = kl_phi_weight
         self.label_dim = label_dim
         self.latent_dim = latent_dim
@@ -265,7 +262,6 @@ class VariationallyCoupledFlowMatching(nn.Module):
 
         t = _time_broadcast(x_1.shape, device, x_1.dtype)
         x_t = (1 - t) * x_0 + t * x_1
-        u = (x_1 - x_0).detach()
 
         mu_z, logvar_z = self.latent_encoder(
             x_0.detach(), x_1.detach(), x_t.detach(), t.detach()
@@ -282,12 +278,10 @@ class VariationallyCoupledFlowMatching(nn.Module):
             inputs: Tuple[torch.Tensor, ...],
             tangents: Tuple[torch.Tensor, ...],
         ) -> torch.Tensor:
-            _, derivative = autograd_jvp(
+            _, derivative = func_jvp(
                 fn,
                 inputs,
                 tangents,
-                create_graph=True,
-                strict=True,
             )
             return derivative
 
@@ -332,10 +326,7 @@ class VariationallyCoupledFlowMatching(nn.Module):
             return wrapped
 
         # Theta (velocity network) objectives -------------------------------------------------
-        fm_residual = self.velocity(
-            x_t, t, labels_detached, z
-        ) - u
-        fm_loss = fm_residual.reshape(batch, -1).pow(2).mean(dim=1).mean()
+        base_velocity = (x_1 - x_0).detach()
 
         dzdt = _total_time_derivative(
             _latent_phi(detach_params=True),
@@ -343,39 +334,39 @@ class VariationallyCoupledFlowMatching(nn.Module):
             (
                 torch.zeros_like(x_0),
                 torch.zeros_like(x_1),
-                (x_1 - x_0).detach(),
+                base_velocity,
                 torch.ones_like(t),
             ),
         )
 
-        tangent = (
-            (x_1 - x_0).detach(),
-            torch.ones_like(t),
-            dzdt.detach(),
-        )
-        straightness = _total_time_derivative(
+        dudt = _total_time_derivative(
             _velocity_theta(detach_params=True),
             (x_t, t, z),
-            tangent,
+            (
+                base_velocity,
+                torch.ones_like(t),
+                dzdt,
+            ),
         )
-        straightness_loss = (
-            straightness.reshape(batch, -1).pow(2).sum(dim=1).mean()
-        )
+
+        target_velocity = (base_velocity + (1 - t) * dudt).detach()
+
+        fm_residual = self.velocity(
+            x_t, t, labels_detached, z
+        ) - target_velocity
+        fm_loss = fm_residual.reshape(batch, -1).pow(2).mean(dim=1).mean()
 
         kl_phi_loss = -0.5 * (1 + logvar_z - mu_z.pow(2) - logvar_z.exp())
         kl_phi_loss = kl_phi_loss.sum(dim=1).mean()
 
         flow_matching_weighted = self.flow_matching_theta_weight * fm_loss
-        straightness_weighted = self.straightness_weight * straightness_loss
         phi_kl_weighted = self.kl_phi_weight * kl_phi_loss
 
-        total_loss = flow_matching_weighted + straightness_weighted + phi_kl_weighted
+        total_loss = flow_matching_weighted + phi_kl_weighted
 
         log_dict = {
             "flow_matching_theta_loss": fm_loss.detach(),
             "flow_matching_weighted_loss": flow_matching_weighted.detach(),
-            "straightness_loss": straightness_loss.detach(),
-            "straightness_weighted_loss": straightness_weighted.detach(),
             "kl_phi_loss": kl_phi_loss.detach(),
             "kl_phi_weighted_loss": phi_kl_weighted.detach(),
             "total_loss": total_loss.detach(),

@@ -107,12 +107,6 @@ def main() -> None:
         help="Flow matching loss weight for the velocity network (overrides model config)",
     )
     parser.add_argument(
-        "--straightness-weight",
-        type=float,
-        default=None,
-        help="Straightness loss weight jointly applied to velocity and latent encoder",
-    )
-    parser.add_argument(
         "--kl-phi-weight",
         type=float,
         default=None,
@@ -141,8 +135,6 @@ def main() -> None:
         cfg.dataset.batch_size = args.batch_size
     if args.flow_matching_theta_weight is not None:
         cfg.model.flow_matching_theta_weight = args.flow_matching_theta_weight
-    if args.straightness_weight is not None:
-        cfg.model.straightness_weight = args.straightness_weight
     if args.kl_phi_weight is not None:
         cfg.model.kl_phi_weight = args.kl_phi_weight
     if args.ema_rate is not None:
@@ -150,11 +142,10 @@ def main() -> None:
 
     dataset_name = cfg.dataset.name.lower()
     batch_size = cfg.dataset.batch_size
-    run_name = "{}_b{}_fmth_{}_str_{}_klp_{}_ema_{}".format(
+    run_name = "{}_b{}_fmth_{}_klp_{}_ema_{}".format(
         dataset_name,
         batch_size,
         _format_hparam(cfg.model.flow_matching_theta_weight),
-        _format_hparam(cfg.model.straightness_weight),
         _format_hparam(cfg.model.kl_phi_weight),
         _format_hparam(cfg.model.ema_rate),
     )

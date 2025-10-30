@@ -227,7 +227,6 @@ class Trainer:
                     "fmθ": logs.get(
                         "flow_matching_theta_loss", logs.get("total_loss", 0.0)
                     ),
-                    "str": logs.get("straightness_weighted_loss", 0.0),
                     "klφ": logs.get("kl_phi_loss", 0.0),
                 }
             )
