@@ -5,7 +5,7 @@ This repository contains a minimal PyTorch implementation of **Variationally-Cou
 ## What's inside
 
 * Plain PyTorch training loop with two optimizers (velocity and latent encoder) and optional EMA.
-* Linear-interpolant flow matching loss combined with a shared straightness regularizer for the velocity and latent encoder.
+* Linear-interpolant flow matching loss with a variational latent encoder and time-derivative corrected target velocity.
 * Dataset factory covering CIFAR-10, MNIST, Fashion-MNIST, FFHQ (image folder), and ImageNet (image folder) with conditional labels when requested.
 * Lightweight callback system for periodic sample generation and FID evaluation.
 * Inference helpers for loading checkpoints and generating samples without Lightning or WandB.

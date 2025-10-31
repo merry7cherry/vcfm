@@ -100,7 +100,6 @@ def build_model(cfg: Config) -> VariationallyCoupledFlowMatching:
         sigma_min=cfg.model.sigma_min,
         sigma_max=cfg.model.sigma_max,
         flow_matching_theta_weight=cfg.model.flow_matching_theta_weight,
-        straightness_weight=cfg.model.straightness_weight,
         kl_phi_weight=cfg.model.kl_phi_weight,
         label_dim=label_dim,
         latent_dim=cfg.model.latent_dim,

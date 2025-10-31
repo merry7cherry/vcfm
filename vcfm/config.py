@@ -38,7 +38,6 @@ class ModelConfig:
     sigma_min: float
     sigma_max: float
     flow_matching_theta_weight: float
-    straightness_weight: float
     kl_phi_weight: float
     latent_dim: int
     phi_hidden_channels: int
