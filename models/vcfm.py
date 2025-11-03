@@ -213,12 +213,9 @@ class VariationallyCoupledFlowMatching(nn.Module):
         )
 
         x_0 = torch.randn_like(x_1)
-        x_0 = x_0.requires_grad_(True)
 
         t = _time_broadcast(x_1.shape, device, x_1.dtype)
-        t = t.requires_grad_(True)
         x_t = (1 - t) * x_0 + t * x_1
-        x_t = x_t.requires_grad_(True)
         u = (x_1 - x_0).detach()
 
         mu_z, logvar_z = self.latent_encoder(
@@ -260,12 +257,8 @@ class VariationallyCoupledFlowMatching(nn.Module):
             return wrapped
 
         # Theta (velocity network) objectives -------------------------------------------------
-        x_t_theta = x_t
-        t_theta = t
-        z_theta = z
-
         fm_residual = self.velocity(
-            x_t_theta, t_theta, labels_detached, z_theta
+            x_t, t, labels_detached, z
         ) - u
         fm_loss = fm_residual.reshape(batch, -1).pow(2).mean(dim=1).mean()
 
